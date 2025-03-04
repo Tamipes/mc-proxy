@@ -1,6 +1,6 @@
 use core::panic;
 use std::{
-    io::{BufReader, Read},
+    io::{BufReader, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
 };
 
@@ -27,31 +27,34 @@ macro_rules! unwrap_or_return {
     };
 }
 
-fn handle_connection(str: TcpStream, addr: SocketAddr) {
+fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
     println!("{addr} -- Connection established");
-    let mut buf_reader = BufReader::new(&str);
+    // let buf_stream = stream.try_clone().unwrap();
+    let mut reader = stream;
     let mut server_state = ServerState::Handshaking;
 
-    let handshake = unwrap_or_return!(Packet::read_in(&mut buf_reader));
+    let handshake = unwrap_or_return!(Packet::read_in(&mut reader));
     if handshake.packet_id != 0 {
         println!("{addr} -- Not a modern handshake");
         return;
     }
     let mut data_iter = handshake.data.clone().into_iter();
     let version = iter_read_varint(&mut data_iter).unwrap();
+    println!("Version: {version}");
     let hostname = iter_read_string(&mut data_iter).unwrap();
     let port = iter_read_ushort(&mut data_iter).unwrap();
     let next_state = iter_read_varint(&mut data_iter).unwrap();
-    println!(
-        "{addr} -- Packet: {},\n\tversion: {version}\n\thostname: {hostname}\n\tport: {port}\n\tNext state: {}",
-        handshake.proto_name(server_state),
-        match next_state {
-            1 => "(1)Status",
-            2 => "(2)Login",
-            3 => "(3)Transfer",
-            x => "{x}Unknown(error?)"
-        }
-    );
+    println!("{addr} -- Packet: {}", handshake.proto_name(&server_state));
+    // println!(
+    //     "{addr} -- Packet: {},\n\tversion: {version}\n\thostname: {hostname}\n\tport: {port}\n\tNext state: {}",
+    //     handshake.proto_name(server_state),
+    //     match next_state {
+    //         1 => "(1)Status",
+    //         2 => "(2)Login",
+    //         3 => "(3)Transfer",
+    //         x => "{x}Unknown(error?)"
+    //     }
+    // );
     server_state = match next_state {
         1 => ServerState::Status,
         // 2 => "(2)Login",
@@ -61,12 +64,59 @@ fn handle_connection(str: TcpStream, addr: SocketAddr) {
             return;
         }
     };
-    let packet = Packet::read_in(&mut buf_reader);
-    dbg!(packet);
+
+    match server_state {
+        ServerState::Handshaking => todo!(),
+        ServerState::Status => {
+            let packet = Packet::read_in(&mut reader).unwrap();
+            println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
+            if packet.packet_id == 0 {
+                //Respond pls
+                let mut a = write_string(JSON_PAYLOAD.to_owned());
+                let mut vec = write_varint(a.len() as i32 + 1);
+                vec.append(&mut write_varint(0));
+                vec.append(&mut a);
+                reader.write_all(&vec);
+                reader.flush().unwrap();
+                println!("{addr} -- response packet sent");
+                let packet = Packet::read_in(&mut reader).unwrap();
+                if packet.packet_id == 1 {
+                    println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
+                    reader.write(&[9, 1]).unwrap();
+                    reader.write_all(&packet.data).unwrap();
+                    reader.flush().unwrap();
+                } else {
+                    println!("ERRORRRR");
+                }
+            }
+        }
+    }
     // let packet = Packet::read_in(&mut buf_reader);
     // dbg!(packet);
     println!("{addr} -- Reached the end of the implementation")
 }
+const JSON_PAYLOAD: &str = "{\"version\":{\"name\":\"1.20.1\",\"protocol\":763},\"enforcesSecureChat\":true,\"description\":\"A Minecraft Server\",\"players\":{\"max\":20,\"online\":0}}";
+
+const SON_PAYLOAD: &str = "{
+    \"version\": {
+        \"name\": \"1.21.2\",
+        \"protocol\": &mut 768
+    },
+    \"players\": {
+        \"max\": 100,
+        \"online\": 5,
+        \"sample\": [
+            {
+                \"name\": \"thinkofdeath\",
+                \"id\": \"4566e69f-c907-48ee-8d71-d7ba5aa00d20\"
+            }
+        ]
+    },
+    \"description\": {
+        \"text\": \"Hello, world!\"
+    },
+    \"enforcesSecureChat\": false
+}";
 
 #[derive(Debug)]
 pub struct Packet {
@@ -77,11 +127,11 @@ pub struct Packet {
 }
 
 impl Packet {
-    fn read_in(buf: &mut BufReader<&TcpStream>) -> Option<Packet> {
+    fn read_in<R: Read>(buf: &mut R) -> Option<Packet> {
         let (length, mut data1) = read_varint(buf).unwrap();
-        println!("---length: {length}");
+        // println!("---length: {length}");
         let (packet_id, mut data2) = read_varint(buf).unwrap();
-        println!("---id: {packet_id}");
+        // println!("---id: {packet_id}");
         if packet_id == 122 {
             return None;
         }
@@ -107,7 +157,7 @@ impl Packet {
             }
         }
     }
-    fn proto_name(&self, state: ServerState) -> String {
+    fn proto_name(&self, state: &ServerState) -> String {
         match state {
             ServerState::Handshaking => match self.packet_id {
                 0 => "Handshake".to_owned(),
@@ -161,7 +211,30 @@ where
     Some(value)
 }
 
-fn read_varint(reader: &mut BufReader<&TcpStream>) -> Option<(i32, Vec<u8>)> {
+fn write_string(string: String) -> Vec<u8> {
+    let mut vec = write_varint(string.len() as i32);
+    vec.append(&mut (Vec::from(string.as_bytes())));
+    vec
+}
+
+fn write_varint(num: i32) -> Vec<u8> {
+    let mut num = num;
+    let mut vec = Vec::new();
+    if num == 0 {
+        vec.push(0);
+    }
+    while num != 0 {
+        vec.push(num as u8 & SEGMENT_BITS);
+        num = num >> 7;
+        if num != 0 {
+            let a = vec.pop().unwrap();
+            vec.push(a | CONTINUE_BIT);
+        }
+    }
+    vec
+}
+
+fn read_varint<R: Read>(reader: &mut R) -> Option<(i32, Vec<u8>)> {
     let mut value: i32 = 0;
     let mut position = 0;
     let mut vec = Vec::new();
