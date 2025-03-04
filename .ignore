@@ -1,0 +1,7 @@
+Cargo.lock
+flake.lock
+
+# Same as gitignore:
+target
+result
+.direnv
