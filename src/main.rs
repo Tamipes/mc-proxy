@@ -29,7 +29,6 @@ macro_rules! unwrap_or_return {
 
 fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
     println!("{addr} -- Connection established");
-    // let buf_stream = stream.try_clone().unwrap();
     let mut reader = stream;
     let mut server_state = ServerState::Handshaking;
 
@@ -45,16 +44,6 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
     let port = iter_read_ushort(&mut data_iter).unwrap();
     let next_state = iter_read_varint(&mut data_iter).unwrap();
     println!("{addr} -- Packet: {}", handshake.proto_name(&server_state));
-    // println!(
-    //     "{addr} -- Packet: {},\n\tversion: {version}\n\thostname: {hostname}\n\tport: {port}\n\tNext state: {}",
-    //     handshake.proto_name(server_state),
-    //     match next_state {
-    //         1 => "(1)Status",
-    //         2 => "(2)Login",
-    //         3 => "(3)Transfer",
-    //         x => "{x}Unknown(error?)"
-    //     }
-    // );
     server_state = match next_state {
         1 => ServerState::Status,
         // 2 => "(2)Login",
@@ -72,11 +61,15 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
             println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
             if packet.packet_id == 0 {
                 //Respond pls
-                let mut a = write_string(JSON_PAYLOAD.to_owned());
+                let status_payload = StatusPayload {
+                    description: "Proxy in Rust <3".to_owned(),
+                    protocol_version: version,
+                };
+                let mut a = write_string(status_payload.to_string());
                 let mut vec = write_varint(a.len() as i32 + 1);
                 vec.append(&mut write_varint(0));
                 vec.append(&mut a);
-                reader.write_all(&vec);
+                reader.write_all(&vec).unwrap();
                 reader.flush().unwrap();
                 println!("{addr} -- response packet sent");
                 let packet = Packet::read_in(&mut reader).unwrap();
@@ -91,32 +84,22 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
             }
         }
     }
-    // let packet = Packet::read_in(&mut buf_reader);
-    // dbg!(packet);
     println!("{addr} -- Reached the end of the implementation")
 }
-const JSON_PAYLOAD: &str = "{\"version\":{\"name\":\"1.20.1\",\"protocol\":763},\"enforcesSecureChat\":true,\"description\":\"A Minecraft Server\",\"players\":{\"max\":20,\"online\":0}}";
 
-const SON_PAYLOAD: &str = "{
-    \"version\": {
-        \"name\": \"1.21.2\",
-        \"protocol\": &mut 768
-    },
-    \"players\": {
-        \"max\": 100,
-        \"online\": 5,
-        \"sample\": [
-            {
-                \"name\": \"thinkofdeath\",
-                \"id\": \"4566e69f-c907-48ee-8d71-d7ba5aa00d20\"
-            }
-        ]
-    },
-    \"description\": {
-        \"text\": \"Hello, world!\"
-    },
-    \"enforcesSecureChat\": false
-}";
+//Just for sanity checks
+const JSON_PAYLOAD: &str = "{\"version\":{\"name\":\"1.20.1\",\"protocol\":763},\"enforcesSecureChat\":true,\"description\":\"Proxy in rust <3\",\"players\":{\"max\":20,\"online\":0}}";
+
+struct StatusPayload {
+    description: String,
+    protocol_version: i32,
+}
+
+impl StatusPayload {
+    fn to_string(&self) -> String {
+        format!("{{\"version\":{{\"name\":\"1.20.1\",\"protocol\":{0}}},\"enforcesSecureChat\":true,\"description\":\"{1}\",\"players\":{{\"max\":20,\"online\":0}}}}",self.protocol_version,self.description)
+    }
+}
 
 #[derive(Debug)]
 pub struct Packet {
@@ -128,24 +111,24 @@ pub struct Packet {
 
 impl Packet {
     fn read_in<R: Read>(buf: &mut R) -> Option<Packet> {
-        let (length, mut data1) = read_varint(buf).unwrap();
+        let (length, mut data_length) = read_varint(buf).unwrap();
         // println!("---length: {length}");
-        let (packet_id, mut data2) = read_varint(buf).unwrap();
+        let (packet_id, mut data_id) = read_varint(buf).unwrap();
         // println!("---id: {packet_id}");
         if packet_id == 122 {
             return None;
         }
 
-        let mut data: Vec<u8> = vec![0; length as usize - data2.len()];
+        let mut data: Vec<u8> = vec![0; length as usize - data_id.len()];
         match buf.read_exact(&mut data) {
             Ok(_) => {
-                data2.append(&mut data.clone());
-                data1.append(&mut data2);
+                data_id.append(&mut data.clone());
+                data_length.append(&mut data_id);
                 Some(Packet {
                     packet_id,
                     length,
                     data,
-                    all: data1,
+                    all: data_length,
                 })
             }
             Err(_) => {
@@ -255,23 +238,6 @@ fn read_varint<R: Read>(reader: &mut R) -> Option<(i32, Vec<u8>)> {
     }
     Some((value, vec))
 }
-
-// fn read_string(reader: &mut BufReader<&TcpStream>) -> Option<(String, Vec<u8>)> {
-//     let (length, _) = read_varint(reader).unwrap();
-//     let mut data: Vec<u8> = vec![0; length as usize];
-//     let res = reader.read_exact(&mut data).unwrap();
-//     let string = String::from_utf8(data).unwrap();
-//     println!("{}", string);
-//     Some((string))
-// }
-// fn find_min<'a, I>(vals: I)
-// where
-//     I: Iterator<Item = &'a u8>,
-// {
-//     for byte in vals {
-//         println!("{byte}");
-//     }
-// }
 
 fn iter_read_string<I>(data: &mut I) -> Option<String>
 where
