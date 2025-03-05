@@ -2,6 +2,7 @@ use core::panic;
 use std::{
     io::{BufReader, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
+    thread,
 };
 
 fn main() {
@@ -11,7 +12,8 @@ fn main() {
     loop {
         match listener.accept() {
             Ok((str, addr)) => {
-                handle_connection(str, addr);
+                proxy(str, addr);
+                // handle_connection(str, addr);
                 println!("{addr} -- Disconnected")
             }
             Err(err) => eprintln!("Error encountered while resolving connection: {err}"),
@@ -25,6 +27,23 @@ macro_rules! unwrap_or_return {
             None => return,
         }
     };
+}
+
+fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
+    let mut server_stream = TcpStream::connect("127.0.0.1:25565").unwrap();
+    let mut server_stream_clone = server_stream.try_clone().unwrap();
+    let mut client_stream_clone = client_stream.try_clone().unwrap();
+
+    thread::spawn(move || loop {
+        let client_packet = Packet::read_in(&mut client_stream).unwrap();
+        server_stream.write_all(&client_packet.all).unwrap();
+        server_stream.flush().unwrap();
+    });
+    thread::spawn(move || loop {
+        let client_packet = Packet::read_in(&mut server_stream_clone).unwrap();
+        client_stream_clone.write_all(&client_packet.all).unwrap();
+        client_stream_clone.flush().unwrap();
+    });
 }
 
 fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
@@ -131,11 +150,12 @@ impl Packet {
                     all: data_length,
                 })
             }
-            Err(_) => {
+            Err(x) => {
                 if packet_id == 122 {
                     return None;
                 } else {
-                    todo!()
+                    println!("Err: {x}");
+                    panic!();
                 }
             }
         }
@@ -236,7 +256,7 @@ where
         position += 7;
 
         if position > 32 {
-            todo!();
+            return None;
         }
     }
     Some((value, vec))
