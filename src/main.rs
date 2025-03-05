@@ -5,6 +5,11 @@ use std::{
     thread,
 };
 
+mod packets;
+mod types;
+use packets::Packet;
+use types::*;
+
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:7878").expect("Can't bind to address");
     println!("Listening for connections!");
@@ -34,16 +39,26 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
     let mut server_stream_clone = server_stream.try_clone().unwrap();
     let mut client_stream_clone = client_stream.try_clone().unwrap();
 
-    thread::spawn(move || loop {
-        let client_packet = Packet::read_in(&mut client_stream).unwrap();
+    let client_handle = thread::spawn(move || loop {
+        let client_packet = match Packet::read_in(&mut client_stream) {
+            Some(x) => x,
+            None => {
+                // client_stream.write_all(&mut DISCONNECT.all()).unwrap();
+                panic!()
+            }
+        };
+        println!("Client : {:#x}", client_packet.id);
         server_stream.write_all(&client_packet.all).unwrap();
         server_stream.flush().unwrap();
     });
-    thread::spawn(move || loop {
-        let client_packet = Packet::read_in(&mut server_stream_clone).unwrap();
-        client_stream_clone.write_all(&client_packet.all).unwrap();
+    let server_handle = thread::spawn(move || loop {
+        let server_packet = Packet::read_in(&mut server_stream_clone).unwrap();
+        println!("Server : {:#x}", server_packet.id);
+        client_stream_clone.write_all(&server_packet.all).unwrap();
         client_stream_clone.flush().unwrap();
     });
+    client_handle.join().unwrap();
+    server_handle.join().unwrap();
 }
 
 fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
@@ -51,7 +66,7 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
     let mut server_state = ServerState::Handshaking;
 
     let handshake = unwrap_or_return!(Packet::read_in(&mut stream));
-    if handshake.packet_id != 0 {
+    if handshake.id != 0 {
         println!("{addr} -- Not a modern handshake");
         return;
     }
@@ -77,7 +92,7 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
         ServerState::Status => {
             let packet = Packet::read_in(&mut stream).unwrap();
             println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
-            if packet.packet_id == 0 {
+            if packet.id == 0 {
                 //Respond pls
                 let status_payload = StatusPayload {
                     description: format!("Proxy in Rust <3\n{}:{}", hostname, port),
@@ -91,7 +106,7 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
                 stream.flush().unwrap();
                 println!("{addr} -- response packet sent");
                 let packet = Packet::read_in(&mut stream).unwrap();
-                if packet.packet_id == 1 {
+                if packet.id == 1 {
                     println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
                     stream.write(&[9, 1]).unwrap();
                     stream.write_all(&packet.data).unwrap();
@@ -101,6 +116,7 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
                 }
             }
         }
+        _ => todo!(),
     }
     println!("{addr} -- Reached the end of the implementation")
 }
@@ -119,68 +135,12 @@ impl StatusPayload {
     }
 }
 
-#[derive(Debug)]
-pub struct Packet {
-    packet_id: i32,
-    length: i32,
-    data: Vec<u8>,
-    all: Vec<u8>,
-}
-
-impl Packet {
-    fn read_in(buf: &mut TcpStream) -> Option<Packet> {
-        let bytes_iter = &mut buf.bytes().into_iter().map(|x| x.unwrap());
-        let (length, mut data_length) = read_varint_data(bytes_iter).unwrap();
-        // println!("---length: {length}");
-        let (packet_id, mut data_id) = read_varint_data(bytes_iter).unwrap();
-        // println!("---id: {packet_id}");
-        if packet_id == 122 {
-            return None;
-        }
-
-        let mut data: Vec<u8> = vec![0; length as usize - data_id.len()];
-        match buf.read_exact(&mut data) {
-            Ok(_) => {
-                data_id.append(&mut data.clone());
-                data_length.append(&mut data_id);
-                Some(Packet {
-                    packet_id,
-                    length,
-                    data,
-                    all: data_length,
-                })
-            }
-            Err(x) => {
-                if packet_id == 122 {
-                    return None;
-                } else {
-                    println!("Err: {x}");
-                    panic!();
-                }
-            }
-        }
-    }
-    fn proto_name(&self, state: &ServerState) -> String {
-        match state {
-            ServerState::Handshaking => match self.packet_id {
-                0 => "Handshake".to_owned(),
-                _ => "error".to_owned(),
-            },
-            ServerState::Status => match self.packet_id {
-                0 => "StatusRequest".to_owned(),
-                1 => "PingRequest".to_owned(),
-                _ => "error".to_owned(),
-            },
-        }
-    }
-}
-
-const SEGMENT_BITS: u8 = 0x7F;
-const CONTINUE_BIT: u8 = 0x80;
-
 pub enum ServerState {
     Handshaking,
     Status,
+    Login,
+    Configuration,
+    Play,
 }
 
 pub enum HandshakingPackets {
@@ -190,96 +150,4 @@ pub enum HandshakingPackets {
 pub enum StatusPackets {
     StatusRequest,
     PingRequest,
-}
-
-fn read_varint<I>(data: &mut I) -> Option<i32>
-where
-    I: Iterator<Item = u8>,
-{
-    let mut value: i32 = 0;
-    let mut position = 0;
-
-    for current_byte in data {
-        value |= ((current_byte & SEGMENT_BITS) as i32) << position;
-
-        if current_byte & CONTINUE_BIT == 0 {
-            break;
-        }
-        position += 7;
-
-        if position > 32 {
-            todo!();
-        }
-    }
-    Some(value)
-}
-
-fn write_string(string: String) -> Vec<u8> {
-    let mut vec = write_varint(string.len() as i32);
-    vec.append(&mut (Vec::from(string.as_bytes())));
-    vec
-}
-
-fn write_varint(num: i32) -> Vec<u8> {
-    let mut num = num;
-    let mut vec = Vec::new();
-    if num == 0 {
-        vec.push(0);
-    }
-    while num != 0 {
-        vec.push(num as u8 & SEGMENT_BITS);
-        num = num >> 7;
-        if num != 0 {
-            let a = vec.pop().unwrap();
-            vec.push(a | CONTINUE_BIT);
-        }
-    }
-    vec
-}
-
-fn read_varint_data<I>(reader: &mut I) -> Option<(i32, Vec<u8>)>
-where
-    I: Iterator<Item = u8>,
-{
-    let mut value: i32 = 0;
-    let mut position = 0;
-    let mut vec = Vec::new();
-
-    for current_byte in reader {
-        let current_byte = current_byte;
-        vec.push(current_byte);
-        value |= ((current_byte & SEGMENT_BITS) as i32) << position;
-
-        if current_byte & CONTINUE_BIT == 0 {
-            break;
-        }
-        position += 7;
-
-        if position > 32 {
-            return None;
-        }
-    }
-    Some((value, vec))
-}
-
-fn read_string<I>(data: &mut I) -> Option<String>
-where
-    I: Iterator<Item = u8>,
-{
-    let length = read_varint(data).unwrap();
-    let mut vec = Vec::new();
-    for i in 0..length {
-        vec.push(data.next().unwrap());
-    }
-    Some(String::from_utf8(vec).unwrap())
-}
-
-fn read_ushort<I>(data: &mut I) -> Option<u16>
-where
-    I: Iterator<Item = u8>,
-{
-    let mut int: u16 = data.next().unwrap() as u16;
-    int = int << 8;
-    int |= data.next().unwrap() as u16;
-    Some(int)
 }
