@@ -37,11 +37,11 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
         return;
     }
     let mut data_iter = handshake.data.clone().into_iter();
-    let version = iter_read_varint(&mut data_iter).unwrap();
+    let version = read_varint(&mut data_iter).unwrap();
     println!("Version: {version}");
-    let hostname = iter_read_string(&mut data_iter).unwrap();
-    let port = iter_read_ushort(&mut data_iter).unwrap();
-    let next_state = iter_read_varint(&mut data_iter).unwrap();
+    let hostname = read_string(&mut data_iter).unwrap();
+    let port = read_ushort(&mut data_iter).unwrap();
+    let next_state = read_varint(&mut data_iter).unwrap();
     println!("{addr} -- Packet: {}", handshake.proto_name(&server_state));
     server_state = match next_state {
         1 => ServerState::Status,
@@ -109,10 +109,11 @@ pub struct Packet {
 }
 
 impl Packet {
-    fn read_in<R: Read>(buf: &mut R) -> Option<Packet> {
-        let (length, mut data_length) = read_varint(buf).unwrap();
+    fn read_in(buf: &mut TcpStream) -> Option<Packet> {
+        let bytes_iter = &mut buf.bytes().into_iter().map(|x| x.unwrap());
+        let (length, mut data_length) = read_varint_data(bytes_iter).unwrap();
         // println!("---length: {length}");
-        let (packet_id, mut data_id) = read_varint(buf).unwrap();
+        let (packet_id, mut data_id) = read_varint_data(bytes_iter).unwrap();
         // println!("---id: {packet_id}");
         if packet_id == 122 {
             return None;
@@ -171,7 +172,7 @@ pub enum StatusPackets {
     PingRequest,
 }
 
-fn iter_read_varint<I>(data: &mut I) -> Option<i32>
+fn read_varint<I>(data: &mut I) -> Option<i32>
 where
     I: Iterator<Item = u8>,
 {
@@ -216,13 +217,16 @@ fn write_varint(num: i32) -> Vec<u8> {
     vec
 }
 
-fn read_varint<R: Read>(reader: &mut R) -> Option<(i32, Vec<u8>)> {
+fn read_varint_data<I>(reader: &mut I) -> Option<(i32, Vec<u8>)>
+where
+    I: Iterator<Item = u8>,
+{
     let mut value: i32 = 0;
     let mut position = 0;
     let mut vec = Vec::new();
 
-    for current_byte in reader.bytes() {
-        let current_byte = current_byte.unwrap();
+    for current_byte in reader {
+        let current_byte = current_byte;
         vec.push(current_byte);
         value |= ((current_byte & SEGMENT_BITS) as i32) << position;
 
@@ -238,11 +242,11 @@ fn read_varint<R: Read>(reader: &mut R) -> Option<(i32, Vec<u8>)> {
     Some((value, vec))
 }
 
-fn iter_read_string<I>(data: &mut I) -> Option<String>
+fn read_string<I>(data: &mut I) -> Option<String>
 where
     I: Iterator<Item = u8>,
 {
-    let length = iter_read_varint(data).unwrap();
+    let length = read_varint(data).unwrap();
     let mut vec = Vec::new();
     for i in 0..length {
         vec.push(data.next().unwrap());
@@ -250,7 +254,7 @@ where
     Some(String::from_utf8(vec).unwrap())
 }
 
-fn iter_read_ushort<I>(data: &mut I) -> Option<u16>
+fn read_ushort<I>(data: &mut I) -> Option<u16>
 where
     I: Iterator<Item = u8>,
 {
