@@ -1,6 +1,7 @@
 use crate::{types::*, ServerState};
 use std::{io::Read, net::TcpStream};
-mod serverbound;
+pub mod clientbound;
+pub mod serverbound;
 
 #[derive(Debug)]
 pub struct Packet {
@@ -9,8 +10,24 @@ pub struct Packet {
     pub data: Vec<u8>,
     pub all: Vec<u8>,
 }
+pub trait SendPacket {
+    fn send_packet(&self, stream: &mut TcpStream);
+}
 
 impl Packet {
+    pub fn from_bytes(id: i32, data: Vec<u8>) -> Packet {
+        let id = VarInt::from(id);
+        let length = VarInt::from((data.len() + id.get_data().len()) as i32);
+        let mut all = length.get_data();
+        all.append(&mut id.get_data());
+        all.append(&mut data.clone());
+        Packet {
+            id,
+            length,
+            data,
+            all,
+        }
+    }
     pub fn new(id: i32, data: Vec<u8>) -> Packet {
         let mut vec = VarInt::from(id).get_data();
         vec.append(&mut data.clone());
@@ -25,7 +42,7 @@ impl Packet {
             all,
         }
     }
-    pub fn read_in(buf: &mut TcpStream) -> Option<Packet> {
+    pub fn parse(buf: &mut TcpStream) -> Option<Packet> {
         let bytes_iter = &mut buf.bytes().into_iter().map(|x| x.unwrap());
         let length = VarInt::parse(bytes_iter)?;
         // println!("---length: {length}");

@@ -2,12 +2,13 @@ use core::panic;
 use std::{
     io::{BufReader, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
+    sync::{Arc, Mutex},
     thread,
 };
 
 mod packets;
 mod types;
-use packets::Packet;
+use packets::{Packet, SendPacket};
 use types::*;
 
 fn main() {
@@ -17,9 +18,10 @@ fn main() {
     loop {
         match listener.accept() {
             Ok((str, addr)) => {
+                println!("{addr} -- Connected");
                 proxy(str, addr);
                 // handle_connection(str, addr);
-                println!("{addr} -- Disconnected")
+                println!("{addr} -- Disconnected");
             }
             Err(err) => eprintln!("Error encountered while resolving connection: {err}"),
         }
@@ -33,39 +35,142 @@ macro_rules! unwrap_or_return {
         }
     };
 }
-
+struct ConnectionState {
+    state: ServerState,
+    motd: String,
+}
 fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
     let mut server_stream = TcpStream::connect("127.0.0.1:25565").unwrap();
     let mut server_stream_clone = server_stream.try_clone().unwrap();
     let mut client_stream_clone = client_stream.try_clone().unwrap();
+    let server_state = Arc::new(Mutex::new(ConnectionState {
+        state: ServerState::Handshaking,
+        motd: "Rust proxy <3".to_string(),
+    }));
+    let server_state_clone = server_state.clone();
+    let server_state_clone_clone = server_state.clone();
 
-    let client_handle = thread::spawn(move || loop {
-        let client_packet = match Packet::read_in(&mut client_stream) {
-            Some(x) => x,
-            None => {
-                // client_stream.write_all(&mut DISCONNECT.all()).unwrap();
-                panic!()
+    let client_handle = thread::spawn(move || {
+        let mut status_req = false;
+        loop {
+            let client_packet = match Packet::parse(&mut client_stream) {
+                Some(x) => x,
+                None => {
+                    // client_stream.write_all(&mut DISCONNECT.all()).unwrap();
+                    panic!()
+                }
+            };
+            let state = server_state.lock().unwrap().state;
+            match state {
+                ServerState::Handshaking => {
+                    if client_packet.id.get_int() == 0 {
+                        let a = packets::serverbound::handshake::Handshake::parse(client_packet)
+                            .expect("Handshake request from client failed to parse");
+                        a.send_packet(&mut server_stream);
+                        match a.get_next_state() {
+                            1 => {
+                                server_state.lock().unwrap().state = ServerState::Status;
+                                println!("Client HANDSHAKE: {:#x} -> Status", 0);
+                            }
+                            _ => {
+                                server_state.lock().unwrap().state = ServerState::Login;
+                                println!("Client HANDSHAKE: {:#x} -> Login", 0);
+                            }
+                        }
+                    } else {
+                        println!("Bad handshake by client...");
+                        panic!();
+                    }
+                }
+                ServerState::Status => match client_packet.id.get_int() {
+                    0 => {
+                        if status_req {
+                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            println!("Second status req, exiting!");
+                            return;
+                        }
+                        let a = packets::serverbound::status::StatusRequest::parse(client_packet)
+                            .expect("Couldn't parse statusrequest serverbound???");
+                        a.send_packet(&mut server_stream);
+                        println!("Client STATUS: {:#x}", 0);
+                        status_req = true;
+                    }
+                    _ => {
+                        println!("Client STATUS: {:#x}", client_packet.id.get_int());
+                        server_stream.write_all(&client_packet.all).unwrap();
+                        server_stream.flush().unwrap();
+                    }
+                },
+                _ => {
+                    println!("Client _: {:#x}", client_packet.id.get_int());
+                    server_stream.write_all(&client_packet.all).unwrap();
+                    server_stream.flush().unwrap();
+                }
             }
-        };
-        println!("Client : {:#x}", client_packet.id.get_int());
-        server_stream.write_all(&client_packet.all).unwrap();
-        server_stream.flush().unwrap();
+            if server_state.lock().unwrap().state == ServerState::ShutDown {
+                println!("Shutdown by server_status");
+                return;
+            }
+        }
     });
-    let server_handle = thread::spawn(move || loop {
-        let server_packet = Packet::read_in(&mut server_stream_clone).unwrap();
-        println!("Server : {:#x}", server_packet.id.get_int());
-        client_stream_clone.write_all(&server_packet.all).unwrap();
-        client_stream_clone.flush().unwrap();
+    let server_handle = thread::spawn(move || {
+        let mut status_req = false;
+        loop {
+            let server_packet = Packet::parse(&mut server_stream_clone).unwrap();
+            let state = server_state_clone.lock().unwrap().state;
+
+            match state {
+                ServerState::Status => {
+                    if server_packet.id.get_int() == 0 {
+                        if status_req {
+                            server_state_clone.lock().unwrap().state = ServerState::ShutDown;
+                            println!("Second status req, exiting!");
+                            return;
+                        }
+                        let a = packets::clientbound::status::StatusResponse::parse(server_packet)
+                            .unwrap();
+                        let mut json = a.get_json().clone();
+                        json.description
+                            .text
+                            .push_str("\n    Rusty proxy <3 version");
+                        let a = packets::clientbound::status::StatusResponse::set_json(json);
+                        a.send_packet(&mut client_stream_clone);
+                        println!("Server STATUS: {:#x} StatusResponse\t{}", 0, a.get_string());
+                        status_req = true;
+                    } else {
+                        println!("Server _: {:#x}", server_packet.id.get_int());
+                        client_stream_clone.write_all(&server_packet.all).unwrap();
+                        client_stream_clone.flush().unwrap();
+                    }
+                }
+                _ => {
+                    println!("Server _: {:#x}", server_packet.id.get_int());
+                    client_stream_clone.write_all(&server_packet.all).unwrap();
+                    client_stream_clone.flush().unwrap();
+                }
+            };
+
+            if server_state_clone.lock().unwrap().state == ServerState::ShutDown {
+                println!("Shutdown by server_status");
+                return;
+            }
+        }
     });
-    client_handle.join().unwrap();
-    server_handle.join().unwrap();
+    match client_handle.join() {
+        Ok(_) => (),
+        Err(_) => server_state_clone_clone.lock().unwrap().state = ServerState::ShutDown,
+    };
+    match server_handle.join() {
+        Ok(_) => (),
+        Err(_) => server_state_clone_clone.lock().unwrap().state = ServerState::ShutDown,
+    };
 }
 
 fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
     println!("{addr} -- Connection established");
     let mut server_state = ServerState::Handshaking;
 
-    let handshake = unwrap_or_return!(Packet::read_in(&mut stream));
+    let handshake = unwrap_or_return!(Packet::parse(&mut stream));
     if handshake.id.get_int() != 0 {
         println!("{addr} -- Not a modern handshake");
         return;
@@ -90,7 +195,7 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
     match server_state {
         ServerState::Handshaking => todo!(),
         ServerState::Status => {
-            let packet = Packet::read_in(&mut stream).unwrap();
+            let packet = Packet::parse(&mut stream).unwrap();
             println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
             if packet.id.get_int() == 0 {
                 //Respond pls
@@ -109,7 +214,7 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
                 stream.write_all(&vec).unwrap();
                 stream.flush().unwrap();
                 println!("{addr} -- response packet sent");
-                let packet = Packet::read_in(&mut stream).unwrap();
+                let packet = Packet::parse(&mut stream).unwrap();
                 if packet.id.get_int() == 1 {
                     println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
                     stream.write(&[9, 1]).unwrap();
@@ -139,12 +244,14 @@ impl StatusPayload {
     }
 }
 
+#[derive(Copy, Clone, PartialEq)]
 pub enum ServerState {
     Handshaking,
     Status,
     Login,
     Configuration,
     Play,
+    ShutDown,
 }
 
 pub enum HandshakingPackets {
