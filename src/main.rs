@@ -29,10 +29,9 @@ macro_rules! unwrap_or_return {
 
 fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
     println!("{addr} -- Connection established");
-    let mut reader = stream;
     let mut server_state = ServerState::Handshaking;
 
-    let handshake = unwrap_or_return!(Packet::read_in(&mut reader));
+    let handshake = unwrap_or_return!(Packet::read_in(&mut stream));
     if handshake.packet_id != 0 {
         println!("{addr} -- Not a modern handshake");
         return;
@@ -57,27 +56,27 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
     match server_state {
         ServerState::Handshaking => todo!(),
         ServerState::Status => {
-            let packet = Packet::read_in(&mut reader).unwrap();
+            let packet = Packet::read_in(&mut stream).unwrap();
             println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
             if packet.packet_id == 0 {
                 //Respond pls
                 let status_payload = StatusPayload {
-                    description: "Proxy in Rust <3".to_owned(),
+                    description: format!("Proxy in Rust <3\n{}:{}", hostname, port),
                     protocol_version: version,
                 };
                 let mut a = write_string(status_payload.to_string());
                 let mut vec = write_varint(a.len() as i32 + 1);
                 vec.append(&mut write_varint(0));
                 vec.append(&mut a);
-                reader.write_all(&vec).unwrap();
-                reader.flush().unwrap();
+                stream.write_all(&vec).unwrap();
+                stream.flush().unwrap();
                 println!("{addr} -- response packet sent");
-                let packet = Packet::read_in(&mut reader).unwrap();
+                let packet = Packet::read_in(&mut stream).unwrap();
                 if packet.packet_id == 1 {
                     println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
-                    reader.write(&[9, 1]).unwrap();
-                    reader.write_all(&packet.data).unwrap();
-                    reader.flush().unwrap();
+                    stream.write(&[9, 1]).unwrap();
+                    stream.write_all(&packet.data).unwrap();
+                    stream.flush().unwrap();
                 } else {
                     println!("ERRORRRR");
                 }
