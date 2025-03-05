@@ -1,35 +1,35 @@
-use std::{io::Read, net::TcpStream};
-
 use crate::{types::*, ServerState};
+use std::{io::Read, net::TcpStream};
+mod serverbound;
 
 #[derive(Debug)]
 pub struct Packet {
-    pub id: i32,
-    length: i32,
+    pub id: VarInt,
+    length: VarInt,
     pub data: Vec<u8>,
     pub all: Vec<u8>,
 }
 
 impl Packet {
     pub fn new(id: i32, data: Vec<u8>) -> Packet {
-        let mut vec = write_varint(id);
+        let mut vec = VarInt::from(id).get_data();
         vec.append(&mut data.clone());
 
-        let mut all = write_varint(vec.len() as i32);
+        let mut all = VarInt::from(vec.len() as i32).get_data();
         all.append(&mut vec.clone());
         all.append(&mut data.clone());
         Packet {
-            id,
-            length: vec.len() as i32,
+            id: VarInt::from(id),
+            length: VarInt::from(vec.len() as i32),
             data,
             all,
         }
     }
     pub fn read_in(buf: &mut TcpStream) -> Option<Packet> {
         let bytes_iter = &mut buf.bytes().into_iter().map(|x| x.unwrap());
-        let (length, mut data_length) = read_varint_data(bytes_iter)?;
+        let length = VarInt::parse(bytes_iter)?;
         // println!("---length: {length}");
-        let (packet_id, mut data_id) = match read_varint_data(bytes_iter) {
+        let id = match VarInt::parse(bytes_iter) {
             Some(x) => x,
             None => {
                 println!("Packet id problem(it was None)! REEEEEEEEEEEEEEEEEEEE");
@@ -38,48 +38,51 @@ impl Packet {
             }
         };
         // println!("---id: {packet_id}");
-        if packet_id == 122 {
+        if id.get_int() == 122 {
             return None;
         }
 
-        let mut data: Vec<u8> = vec![0; length as usize - data_id.len()];
+        let mut data: Vec<u8> = vec![0; length.get_int() as usize - id.get_data().len()];
         match buf.read_exact(&mut data) {
             Ok(_) => {
-                data_id.append(&mut data.clone());
-                data_length.append(&mut data_id);
+                // data_id.append(&mut data.clone());
+                // data_length.append(&mut data_id);
+                let mut vec = id.get_data();
+                vec.append(&mut data.clone());
+                let mut all = length.get_data();
+                all.append(&mut vec);
                 Some(Packet {
-                    id: packet_id,
+                    id,
                     length,
                     data,
-                    all: data_length,
+                    all,
                 })
             }
             Err(x) => {
-                if packet_id == 122 {
+                if id.get_int() == 122 {
                     return None;
                 } else {
-                    println!("len = {length}: {:?}", data_length);
+                    println!("len = {}: {:?}", length.get_int(), length.get_data());
                     println!("Buffer read error: {x}");
-                    data_length.append(&mut data_id);
                     return None;
                 }
             }
         }
     }
     pub fn all(&self) -> Vec<u8> {
-        let mut vec = write_varint(self.id);
+        let mut vec = self.id.get_data();
         vec.append(&mut self.data.clone());
-        let mut all = write_varint(vec.len() as i32);
+        let mut all = VarInt::from(vec.len() as i32).get_data();
         all.append(&mut vec);
         return all;
     }
     pub fn proto_name(&self, state: &ServerState) -> String {
         match state {
-            ServerState::Handshaking => match self.id {
+            ServerState::Handshaking => match self.id.get_int() {
                 0 => "Handshake".to_owned(),
                 _ => "error".to_owned(),
             },
-            ServerState::Status => match self.id {
+            ServerState::Status => match self.id.get_int() {
                 0 => "StatusRequest".to_owned(),
                 1 => "PingRequest".to_owned(),
                 _ => "error".to_owned(),

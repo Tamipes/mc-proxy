@@ -47,13 +47,13 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                 panic!()
             }
         };
-        println!("Client : {:#x}", client_packet.id);
+        println!("Client : {:#x}", client_packet.id.get_int());
         server_stream.write_all(&client_packet.all).unwrap();
         server_stream.flush().unwrap();
     });
     let server_handle = thread::spawn(move || loop {
         let server_packet = Packet::read_in(&mut server_stream_clone).unwrap();
-        println!("Server : {:#x}", server_packet.id);
+        println!("Server : {:#x}", server_packet.id.get_int());
         client_stream_clone.write_all(&server_packet.all).unwrap();
         client_stream_clone.flush().unwrap();
     });
@@ -66,16 +66,16 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
     let mut server_state = ServerState::Handshaking;
 
     let handshake = unwrap_or_return!(Packet::read_in(&mut stream));
-    if handshake.id != 0 {
+    if handshake.id.get_int() != 0 {
         println!("{addr} -- Not a modern handshake");
         return;
     }
     let mut data_iter = handshake.data.clone().into_iter();
-    let version = read_varint(&mut data_iter).unwrap();
+    let version = VarInt::read(&mut data_iter).unwrap();
     println!("Version: {version}");
-    let hostname = read_string(&mut data_iter).unwrap();
-    let port = read_ushort(&mut data_iter).unwrap();
-    let next_state = read_varint(&mut data_iter).unwrap();
+    let hostname = VarString::parse(&mut data_iter).unwrap();
+    let port = UShort::parse(&mut data_iter).unwrap();
+    let next_state = VarInt::read(&mut data_iter).unwrap();
     println!("{addr} -- Packet: {}", handshake.proto_name(&server_state));
     server_state = match next_state {
         1 => ServerState::Status,
@@ -92,21 +92,25 @@ fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
         ServerState::Status => {
             let packet = Packet::read_in(&mut stream).unwrap();
             println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
-            if packet.id == 0 {
+            if packet.id.get_int() == 0 {
                 //Respond pls
                 let status_payload = StatusPayload {
-                    description: format!("Proxy in Rust <3\n{}:{}", hostname, port),
+                    description: format!(
+                        "Proxy in Rust <3\n{}:{}",
+                        hostname.get_value(),
+                        port.get_value()
+                    ),
                     protocol_version: version,
                 };
-                let mut a = write_string(status_payload.to_string());
-                let mut vec = write_varint(a.len() as i32 + 1);
-                vec.append(&mut write_varint(0));
+                let mut a = VarString::from(status_payload.to_string()).move_data();
+                let mut vec = VarInt::from(a.len() as i32 + 1).get_data();
+                vec.append(&mut VarInt::from(0).get_data());
                 vec.append(&mut a);
                 stream.write_all(&vec).unwrap();
                 stream.flush().unwrap();
                 println!("{addr} -- response packet sent");
                 let packet = Packet::read_in(&mut stream).unwrap();
-                if packet.id == 1 {
+                if packet.id.get_int() == 1 {
                     println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
                     stream.write(&[9, 1]).unwrap();
                     stream.write_all(&packet.data).unwrap();
