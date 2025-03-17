@@ -1,7 +1,10 @@
+extern crate nix;
+
 use core::panic;
 use std::{
     io::{BufReader, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
+    os::fd::AsFd,
     sync::{Arc, Mutex},
     thread,
 };
@@ -10,6 +13,9 @@ mod packets;
 mod types;
 use packets::{Packet, SendPacket};
 use types::*;
+
+use nix::fcntl::{splice, SpliceFFlags};
+use nix::unistd::pipe;
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:7878").expect("Can't bind to address");
@@ -39,6 +45,7 @@ struct ConnectionState {
     state: ServerState,
     motd: String,
 }
+const BUF_SIZE: usize = 1024 * 512;
 fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
     let mut server_stream = TcpStream::connect("127.0.0.1:25565").unwrap();
     let mut server_stream_clone = server_stream.try_clone().unwrap();
@@ -113,6 +120,45 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                         }
                     }
                 }
+                ServerState::Login => {
+                    let (rd, wr) = pipe().unwrap();
+                    loop {
+                        let res = splice(
+                            client_stream.as_fd(),
+                            None,
+                            wr.try_clone().unwrap(),
+                            None,
+                            BUF_SIZE,
+                            SpliceFFlags::empty(),
+                        )
+                        .unwrap();
+                        if res == 0 {
+                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            println!("Client PLAY: {:#x} -> Shutdown res == 0", 0);
+                            panic!();
+                            return;
+                        }
+                        let _res = splice(
+                            rd.try_clone().unwrap(),
+                            None,
+                            server_stream.as_fd(),
+                            None,
+                            BUF_SIZE,
+                            SpliceFFlags::empty(),
+                        )
+                        .unwrap();
+                        if _res == 0 {
+                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            println!("Client PLAY: {:#x} -> Shutdown res == 0", 0);
+                            panic!();
+                            return;
+                        }
+                    }
+                }
+                ServerState::ShutDown => {
+                    println!("Client SHUTDOWN: by server_status");
+                    return;
+                }
                 _ => {
                     let mut vec = [0];
                     client_stream.read_exact(&mut vec).unwrap();
@@ -123,10 +169,6 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                     // server_stream.flush().unwrap();
                 }
             }
-            if server_state.lock().unwrap().state == ServerState::ShutDown {
-                println!("Client SHUTDOWN: by server_status");
-                return;
-            }
         }
     });
     let server_handle = thread::spawn(move || {
@@ -136,7 +178,7 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
 
             match state {
                 ServerState::Handshaking => {
-                    println!("NOOOOOPE");
+                    println!("----------------NOOOOOPE----------------");
                     panic!();
                 }
                 ServerState::Status => {
@@ -163,6 +205,43 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                         client_stream_clone.flush().unwrap();
                     }
                 }
+                ServerState::Login => {
+                    let (rd, wr) = pipe().unwrap();
+                    loop {
+                        let res = splice(
+                            server_stream_clone.as_fd(),
+                            None,
+                            wr.try_clone().unwrap(),
+                            None,
+                            BUF_SIZE,
+                            SpliceFFlags::empty(),
+                        )
+                        .unwrap();
+                        if res == 0 {
+                            server_state_clone.lock().unwrap().state = ServerState::ShutDown;
+                            println!("Client PLAY: {:#x} -> Shutdown res == 0", -1);
+                            return;
+                        }
+                        let _res = splice(
+                            rd.try_clone().unwrap(),
+                            None,
+                            client_stream_clone.as_fd(),
+                            None,
+                            BUF_SIZE,
+                            SpliceFFlags::empty(),
+                        )
+                        .unwrap();
+                        if _res == 0 {
+                            server_state_clone.lock().unwrap().state = ServerState::ShutDown;
+                            println!("Client PLAY: {:#x} -> Shutdown res == 0", -1);
+                            return;
+                        }
+                    }
+                }
+                ServerState::ShutDown => {
+                    println!("Server SHUTDOWN: by server_status");
+                    return;
+                }
                 _ => {
                     let mut vec = [0];
                     server_stream_clone.read(&mut vec).unwrap();
@@ -174,11 +253,6 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                     // client_stream_clone.flush().unwrap();
                 }
             };
-
-            if server_state_clone.lock().unwrap().state == ServerState::ShutDown {
-                println!("Server SHUTDOWN: by server_status");
-                return;
-            }
         }
     });
     match client_handle.join() {
