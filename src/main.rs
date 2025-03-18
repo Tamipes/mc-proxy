@@ -47,7 +47,7 @@ fn main() {
         match listener.accept() {
             Ok((str, addr)) => {
                 println!("{addr} -- Connected");
-                proxy_client(mc_server_handler.clone(), str, addr, &args.proxy_to);
+                proxy_client(mc_server_handler.clone(), str, addr, args.proxy_to.clone());
                 println!("{addr} -- Disconnected");
             }
             Err(err) => eprintln!("Error encountered while resolving connection: {err}"),
@@ -58,84 +58,47 @@ pub fn proxy_client(
     mc_server_handler: Arc<Mutex<MinecraftServerHandler>>,
     mut client_stream: TcpStream,
     client_addr: SocketAddr,
-    mc_addr: &String,
+    mc_addr: String,
 ) {
-    let client_packet = match Packet::parse(&mut client_stream) {
-        Some(x) => x,
-        None => {
+    thread::spawn(move || {
+        let client_packet = match Packet::parse(&mut client_stream) {
+            Some(x) => x,
+            None => {
+                println!("Client HANDSHAKE -> bad packet; Disconnecting...");
+                return;
+            }
+        };
+
+        let handshake;
+        let server_state;
+        if client_packet.id.get_int() == 0 {
+            handshake = packets::serverbound::handshake::Handshake::parse(client_packet)
+                .expect("Handshake request from client failed to parse");
+            server_state = match ClientConnectionState::create(&handshake) {
+                Some(x) => x,
+                None => {
+                    println!(
+                        "Client HANDSHAKE: {:#x} Transfer??? Disconnecting...",
+                        &handshake.next_state.get_int()
+                    );
+                    return;
+                }
+            };
+        } else {
             println!("Client HANDSHAKE -> bad packet; Disconnecting...");
             return;
         }
-    };
-
-    let handshake;
-    let server_state;
-    if client_packet.id.get_int() == 0 {
-        handshake = packets::serverbound::handshake::Handshake::parse(client_packet)
-            .expect("Handshake request from client failed to parse");
-        match handshake.get_next_state() {
-            1 => {
-                server_state = ClientConnectionState::create(&handshake, ProtocolState::Status);
-                println!("Client HANDSHAKE: {:#x} -> Status", 0);
-            }
-            2 => {
-                server_state = ClientConnectionState::create(&handshake, ProtocolState::Login);
-                println!("Client HANDSHAKE: {:#x} -> Login", 0);
-            }
-            3 => {
-                println!("Client HANDSHAKE: {:#x} -> Transfer??? noo shutdown", 0);
-                return;
-            }
-            _ => {
-                println!("Client HANDSHAKE: {:#x} -> bad packet? Shutdown", 0);
-                return;
-            }
-        }
-    } else {
-        println!("Client HANDSHAKE -> bad packet; Disconnecting...");
-        return;
-    }
-    let mut server_stream = match TcpStream::connect(mc_addr) {
-        Ok(x) => x,
-        Err(_) => {
-            let state = server_state.lock().unwrap().state;
-            match state {
-                ProtocolState::Handshaking => todo!(),
-                ProtocolState::Status => {
-                    let client_packet = Packet::parse(&mut client_stream).unwrap();
-                    match client_packet.id.get_int() {
-                        0 => {
-                            println!("Client STATUS: {:#x} Status Request", 0);
-                        }
-                        _ => {
-                            println!(
-                                "Client STATUS: {:#x} Unknown Id -> Shutdown",
-                                client_packet.id.get_int()
-                            );
-                            return;
-                        }
-                    };
-
-                    let mut json = StatusJson::create();
-                    json.version.protocol = server_state.lock().unwrap().protocol_version;
-                    json.players.max = 1;
-                    if mc_server_handler.lock().unwrap().running {
-                        json.description.text =
-                            "Server is starting... please wait\n - Tami with <3".to_owned();
-                        json.players.online = 1;
-                    } else {
-                        json.description.text =
-                            "Server is currently not running. \nJoin to start it! - Tami with <3"
-                                .to_owned();
-                    }
-                    let status_res = packets::clientbound::status::StatusResponse::set_json(json);
-                    status_res.send_packet(&mut client_stream);
-                    if mc_server_handler.lock().unwrap().running {
-                        let mut client_packet = Packet::parse(&mut client_stream).unwrap();
+        let mut server_stream = match TcpStream::connect(mc_addr) {
+            Ok(x) => x,
+            Err(_) => {
+                let state = server_state.lock().unwrap().state;
+                match state {
+                    ProtocolState::Handshaking => todo!(),
+                    ProtocolState::Status => {
+                        let client_packet = Packet::parse(&mut client_stream).unwrap();
                         match client_packet.id.get_int() {
-                            1 => {
-                                println!("Client STATUS: {:#x} Ping Request (exit)", 1);
-                                client_packet.send_packet(&mut client_stream);
+                            0 => {
+                                println!("Client STATUS: {:#x} Status Request", 0);
                             }
                             _ => {
                                 println!(
@@ -145,51 +108,85 @@ pub fn proxy_client(
                                 return;
                             }
                         };
-                    }
-                    println!("Server NOT WORKING ->  Disconnecting...");
-                    return;
-                }
-                ProtocolState::Login => {
-                    let client_packet = Packet::parse(&mut client_stream).unwrap();
-                    //TODO: The underscore bug https://minecraft.wiki/w/Java_Edition_protocol#Type:JSON_Text_Component
-                    let disc_pack;
-                    if mc_server_handler.lock().unwrap().running {
-                        disc_pack = packets::clientbound::login::Disconnect::set_reason(
-                            "It_is_still_starting_<3".to_owned(),
-                        );
-                    } else {
-                        disc_pack = packets::clientbound::login::Disconnect::set_reason(
-                            "Okayyy_starting_it_now_<3".to_owned(),
-                        );
-                    }
-                    disc_pack.send_packet(&mut client_stream);
 
-                    start_minecraft(mc_server_handler.clone());
-                    println!("Server NOT WORKING ->  Disconnecting...");
-                    return;
+                        let mut json = StatusJson::create();
+                        json.version.protocol = server_state.lock().unwrap().protocol_version;
+                        json.players.max = 1;
+                        if mc_server_handler.lock().unwrap().running {
+                            json.description.text =
+                                "§a Server is starting...§r please wait\n - §dTami§r with §d<3§r"
+                                    .to_owned();
+                            json.players.online = 1;
+                        } else {
+                            json.description.text =
+                            "Server is currently §onot§r running. \n§aJoin to start it!§r - §dTami§r with §d<3§r"
+                                .to_owned();
+                        }
+                        let status_res =
+                            packets::clientbound::status::StatusResponse::set_json(json);
+                        status_res.send_packet(&mut client_stream);
+                        if mc_server_handler.lock().unwrap().running {
+                            let mut client_packet = Packet::parse(&mut client_stream).unwrap();
+                            match client_packet.id.get_int() {
+                                1 => {
+                                    println!("Client STATUS: {:#x} Ping Request (exit)", 1);
+                                    client_packet.send_packet(&mut client_stream);
+                                }
+                                _ => {
+                                    println!(
+                                        "Client STATUS: {:#x} Unknown Id -> Shutdown",
+                                        client_packet.id.get_int()
+                                    );
+                                    return;
+                                }
+                            };
+                        }
+                        println!("Server NOT WORKING ->  Disconnecting...");
+                        return;
+                    }
+                    ProtocolState::Login => {
+                        let client_packet = Packet::parse(&mut client_stream).unwrap();
+                        //TODO: The underscore bug https://minecraft.wiki/w/Java_Edition_protocol#Type:JSON_Text_Component
+                        let disc_pack;
+                        if mc_server_handler.lock().unwrap().running {
+                            disc_pack = packets::clientbound::login::Disconnect::set_reason(
+                                "It_is_still_starting_<3".to_owned(),
+                            );
+                        } else {
+                            disc_pack = packets::clientbound::login::Disconnect::set_reason(
+                                "Okayyy_starting_it_now_<3".to_owned(),
+                            );
+                        }
+                        disc_pack.send_packet(&mut client_stream);
+
+                        start_minecraft(mc_server_handler.clone());
+                        println!("Server NOT WORKING ->  Disconnecting...");
+                        return;
+                    }
+                    ProtocolState::Configuration => todo!(),
+                    ProtocolState::Play => todo!(),
+                    ProtocolState::ShutDown => todo!(),
+                    ProtocolState::Transfer => todo!(),
                 }
-                ProtocolState::Configuration => todo!(),
-                ProtocolState::Play => todo!(),
-                ProtocolState::ShutDown => todo!(),
             }
-        }
-    };
-    handshake.send_packet(&mut server_stream);
+        };
+        handshake.send_packet(&mut server_stream);
 
-    let client_handle = client_proxy_thread(
-        client_stream.try_clone().unwrap(),
-        server_stream.try_clone().unwrap(),
-        server_state.clone(),
-    );
-    let server_handle = server_proxy_thread(client_stream, server_stream, server_state.clone());
-    match client_handle.join() {
-        Ok(_) => (),
-        Err(_) => server_state.lock().unwrap().state = ProtocolState::ShutDown,
-    };
-    match server_handle.join() {
-        Ok(_) => (),
-        Err(_) => server_state.lock().unwrap().state = ProtocolState::ShutDown,
-    };
+        let client_handle = client_proxy_thread(
+            client_stream.try_clone().unwrap(),
+            server_stream.try_clone().unwrap(),
+            server_state.clone(),
+        );
+        let server_handle = server_proxy_thread(client_stream, server_stream, server_state.clone());
+        match client_handle.join() {
+            Ok(_) => (),
+            Err(_) => server_state.lock().unwrap().state = ProtocolState::ShutDown,
+        };
+        match server_handle.join() {
+            Ok(_) => (),
+            Err(_) => server_state.lock().unwrap().state = ProtocolState::ShutDown,
+        };
+    });
 }
 
 const BUF_SIZE: usize = 1024 * 512;
@@ -282,6 +279,7 @@ fn client_proxy_thread(
                 }
                 ProtocolState::Configuration => todo!(),
                 ProtocolState::Play => todo!(),
+                ProtocolState::Transfer => todo!(),
             }
         }
     })
@@ -320,7 +318,7 @@ fn server_proxy_thread(
                             let mut json = a.get_json().clone();
                             json.description
                                 .text
-                                .push_str("\n    Rusty proxy <3 version");
+                                .push_str("\n    §dRusty proxy <3 version§r");
                             let a = packets::clientbound::status::StatusResponse::set_json(json);
                             a.send_packet(&mut client_stream);
                             println!(
@@ -387,6 +385,7 @@ fn server_proxy_thread(
                 }
                 ProtocolState::Configuration => todo!(),
                 ProtocolState::Play => todo!(),
+                ProtocolState::Transfer => todo!(),
             };
         }
     })
@@ -396,11 +395,19 @@ struct ClientConnectionState {
     protocol_version: i32,
 }
 impl ClientConnectionState {
-    pub fn create(hand: &Handshake, state: ProtocolState) -> Arc<Mutex<ClientConnectionState>> {
-        Arc::new(Mutex::new(ClientConnectionState {
+    pub fn create(hand: &Handshake) -> Option<Arc<Mutex<ClientConnectionState>>> {
+        let state = match hand.get_next_state() {
+            1 => ProtocolState::Status,
+            2 => ProtocolState::Login,
+            3 => ProtocolState::Transfer,
+            _ => {
+                return None;
+            }
+        };
+        Some(Arc::new(Mutex::new(ClientConnectionState {
             state,
             protocol_version: hand.protocol_version.get_int(),
-        }))
+        })))
     }
 }
 
@@ -409,9 +416,24 @@ pub enum ProtocolState {
     Handshaking,
     Status,
     Login,
+    Transfer,
     Configuration,
     Play,
     ShutDown,
+}
+impl ToString for ProtocolState {
+    fn to_string(&self) -> String {
+        match self {
+            ProtocolState::Handshaking => "Hanshake",
+            ProtocolState::Status => "Status",
+            ProtocolState::Login => "Login",
+            ProtocolState::Configuration => "Configuration ",
+            ProtocolState::Play => "Play",
+            ProtocolState::ShutDown => "Shutdown",
+            ProtocolState::Transfer => "Transfer",
+        }
+        .to_string()
+    }
 }
 
 pub enum HandshakingPackets {
