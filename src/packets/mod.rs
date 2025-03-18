@@ -1,4 +1,4 @@
-use crate::{types::*, ServerState};
+use crate::{types::*, ProtocolState};
 use std::{io::Read, net::TcpStream};
 pub mod clientbound;
 pub mod serverbound;
@@ -51,7 +51,7 @@ impl Packet {
             None => {
                 println!("Packet id problem(it was None)! REEEEEEEEEEEEEEEEEEEE");
                 panic!();
-                return None;
+                // return None;
             }
         };
         // println!("---id: {id}");
@@ -93,13 +93,13 @@ impl Packet {
         all.append(&mut vec);
         return all;
     }
-    pub fn proto_name(&self, state: &ServerState) -> String {
+    pub fn proto_name(&self, state: &ProtocolState) -> String {
         match state {
-            ServerState::Handshaking => match self.id.get_int() {
+            ProtocolState::Handshaking => match self.id.get_int() {
                 0 => "Handshake".to_owned(),
                 _ => "error".to_owned(),
             },
-            ServerState::Status => match self.id.get_int() {
+            ProtocolState::Status => match self.id.get_int() {
                 0 => "StatusRequest".to_owned(),
                 1 => "PingRequest".to_owned(),
                 _ => "error".to_owned(),

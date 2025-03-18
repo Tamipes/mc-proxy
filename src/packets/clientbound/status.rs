@@ -4,7 +4,7 @@ use serde_derive::{Deserialize, Serialize};
 
 use crate::{
     packets::{Packet, SendPacket},
-    types::{UShort, VarInt, VarString},
+    types::VarString,
 };
 
 #[derive(Serialize, Deserialize, Clone)]

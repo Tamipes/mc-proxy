@@ -9,6 +9,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+mod mincraft_server;
 mod packets;
 mod types;
 use packets::{
@@ -16,7 +17,6 @@ use packets::{
     serverbound::handshake::Handshake,
     Packet, SendPacket,
 };
-use types::*;
 
 use nix::fcntl::{splice, SpliceFFlags};
 use nix::unistd::pipe;
@@ -43,31 +43,20 @@ fn main() {
             Ok((str, addr)) => {
                 println!("{addr} -- Connected");
                 proxy(str, addr, &args.proxy_to);
-                // handle_connection(str, addr);
                 println!("{addr} -- Disconnected");
             }
             Err(err) => eprintln!("Error encountered while resolving connection: {err}"),
         }
     }
 }
-macro_rules! unwrap_or_return {
-    ( $e:expr ) => {
-        match $e {
-            Some(x) => x,
-            None => return,
-        }
-    };
-}
-struct ConnectionState {
-    state: ServerState,
-    motd: String,
+struct ClientConnectionState {
+    state: ProtocolState,
     protocol_version: i32,
 }
-impl ConnectionState {
-    pub fn create(hand: &Handshake, state: ServerState) -> Arc<Mutex<ConnectionState>> {
-        Arc::new(Mutex::new(ConnectionState {
+impl ClientConnectionState {
+    pub fn create(hand: &Handshake, state: ProtocolState) -> Arc<Mutex<ClientConnectionState>> {
+        Arc::new(Mutex::new(ClientConnectionState {
             state,
-            motd: "Proxy rust <3".to_owned(),
             protocol_version: hand.protocol_version.get_int(),
         }))
     }
@@ -76,20 +65,20 @@ const BUF_SIZE: usize = 1024 * 512;
 fn client_proxy(
     mut client_stream: TcpStream,
     mut server_stream: TcpStream,
-    mut server_state: Arc<Mutex<ConnectionState>>,
+    server_state: Arc<Mutex<ClientConnectionState>>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut status_req = false;
         loop {
             let state = server_state.lock().unwrap().state.clone();
             match state {
-                ServerState::Handshaking => {}
-                ServerState::Status => {
+                ProtocolState::Handshaking => {}
+                ProtocolState::Status => {
                     let client_packet = Packet::parse(&mut client_stream).unwrap();
                     match client_packet.id.get_int() {
                         0 => {
                             if status_req {
-                                server_state.lock().unwrap().state = ServerState::ShutDown;
+                                server_state.lock().unwrap().state = ProtocolState::ShutDown;
                                 println!(
                                     "Client STATUS: {:#x} -> Shutdown; status_request spam",
                                     0
@@ -114,12 +103,12 @@ fn client_proxy(
                                 "Client STATUS: {:#x} Unknown Id -> Shutdown",
                                 client_packet.id.get_int()
                             );
-                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            server_state.lock().unwrap().state = ProtocolState::ShutDown;
                             return;
                         }
                     }
                 }
-                ServerState::Login => {
+                ProtocolState::Login => {
                     let (rd, wr) = pipe().unwrap();
                     loop {
                         let res = splice(
@@ -132,7 +121,7 @@ fn client_proxy(
                         )
                         .unwrap();
                         if res == 0 {
-                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            server_state.lock().unwrap().state = ProtocolState::ShutDown;
                             server_stream.shutdown(std::net::Shutdown::Both).ok();
                             client_stream.shutdown(std::net::Shutdown::Both).ok();
                             println!("Client PLAY: {:#x} -> Shutdown res == 0", -1);
@@ -148,7 +137,7 @@ fn client_proxy(
                         )
                         .unwrap();
                         if _res == 0 {
-                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            server_state.lock().unwrap().state = ProtocolState::ShutDown;
                             server_stream.shutdown(std::net::Shutdown::Both).ok();
                             client_stream.shutdown(std::net::Shutdown::Both).ok();
                             println!("Client PLAY: {:#x} -> Shutdown res == 0", -1);
@@ -156,12 +145,12 @@ fn client_proxy(
                         }
                     }
                 }
-                ServerState::ShutDown => {
-                    println!("Client SHUTDOWN: by server_status");
+                ProtocolState::ShutDown => {
+                    println!("Client SHUTDOWN: by protocol_state");
                     return;
                 }
-                ServerState::Configuration => todo!(),
-                ServerState::Play => todo!(),
+                ProtocolState::Configuration => todo!(),
+                ProtocolState::Play => todo!(),
             }
         }
     })
@@ -170,7 +159,7 @@ fn client_proxy(
 fn server_proxy(
     mut client_stream: TcpStream,
     mut server_stream: TcpStream,
-    mut server_state: Arc<Mutex<ConnectionState>>,
+    server_state: Arc<Mutex<ClientConnectionState>>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut spam = false;
@@ -178,16 +167,16 @@ fn server_proxy(
             let state = server_state.lock().unwrap().state.clone();
 
             match state {
-                ServerState::Handshaking => {
+                ProtocolState::Handshaking => {
                     println!("----------------NOOOOOPE----------------");
                     panic!();
                 }
-                ServerState::Status => {
+                ProtocolState::Status => {
                     let server_packet = Packet::parse(&mut server_stream).unwrap();
                     match server_packet.id.get_int() {
                         0 => {
                             if spam {
-                                server_state.lock().unwrap().state = ServerState::ShutDown;
+                                server_state.lock().unwrap().state = ProtocolState::ShutDown;
                                 println!(
                                     "Server STATUS: {:#x} -> Shutdown; status_request spam",
                                     0
@@ -212,7 +201,7 @@ fn server_proxy(
                         }
                         1 => {
                             println!("Server STATUS: {:#x} Pong Response (exit)", 1);
-                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            server_state.lock().unwrap().state = ProtocolState::ShutDown;
                             client_stream.write_all(&server_packet.all).unwrap();
                             client_stream.flush().unwrap();
                             return;
@@ -224,7 +213,7 @@ fn server_proxy(
                         }
                     }
                 }
-                ServerState::Login => {
+                ProtocolState::Login => {
                     let (rd, wr) = pipe().unwrap();
                     loop {
                         let res = splice(
@@ -237,7 +226,7 @@ fn server_proxy(
                         )
                         .unwrap();
                         if res == 0 {
-                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            server_state.lock().unwrap().state = ProtocolState::ShutDown;
                             server_stream.shutdown(std::net::Shutdown::Both).ok();
                             client_stream.shutdown(std::net::Shutdown::Both).ok();
                             println!("Server PLAY: {:#x} -> Shutdown res == 0", -1);
@@ -253,7 +242,7 @@ fn server_proxy(
                         )
                         .unwrap();
                         if _res == 0 {
-                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            server_state.lock().unwrap().state = ProtocolState::ShutDown;
                             server_stream.shutdown(std::net::Shutdown::Both).ok();
                             client_stream.shutdown(std::net::Shutdown::Both).ok();
                             println!("Server PLAY: {:#x} -> Shutdown res == 0", -1);
@@ -261,12 +250,12 @@ fn server_proxy(
                         }
                     }
                 }
-                ServerState::ShutDown => {
-                    println!("Server SHUTDOWN: by server_status");
+                ProtocolState::ShutDown => {
+                    println!("Server SHUTDOWN: by protocol_state");
                     return;
                 }
-                ServerState::Configuration => todo!(),
-                ServerState::Play => todo!(),
+                ProtocolState::Configuration => todo!(),
+                ProtocolState::Play => todo!(),
             };
         }
     })
@@ -288,11 +277,11 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
             .expect("Handshake request from client failed to parse");
         match handshake.get_next_state() {
             1 => {
-                server_state = ConnectionState::create(&handshake, ServerState::Status);
+                server_state = ClientConnectionState::create(&handshake, ProtocolState::Status);
                 println!("Client HANDSHAKE: {:#x} -> Status", 0);
             }
             2 => {
-                server_state = ConnectionState::create(&handshake, ServerState::Login);
+                server_state = ClientConnectionState::create(&handshake, ProtocolState::Login);
                 println!("Client HANDSHAKE: {:#x} -> Login", 0);
             }
             3 => {
@@ -328,18 +317,17 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
             let json = StatusJson {
                 version: StatusVersion {
                     name: "???".to_owned(),
-                    protocol: handshake.protocol_version.get_int(),
+                    protocol: server_state.lock().unwrap().protocol_version,
                 },
                 enforcesSecureChat: false,
                 description: StatusDescription {
-                    text: "Server is currently not online. \nJoin to start it!".to_owned(),
+                    text: "Server is currently not online. \nJoin to start it! - Tami with <3"
+                        .to_owned(),
                 },
                 players: StatusPlayers { max: 1, online: 0 },
             };
             let status_res = packets::clientbound::status::StatusResponse::set_json(json);
             status_res.send_packet(&mut client_stream);
-            client_stream.shutdown(std::net::Shutdown::Both).unwrap();
-            client_stream.flush().unwrap();
             println!("Server NOT WORKING ->  Disconnecting...");
             return;
         }
@@ -354,16 +342,16 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
     let server_handle = server_proxy(client_stream, server_stream, server_state.clone());
     match client_handle.join() {
         Ok(_) => (),
-        Err(_) => server_state.lock().unwrap().state = ServerState::ShutDown,
+        Err(_) => server_state.lock().unwrap().state = ProtocolState::ShutDown,
     };
     match server_handle.join() {
         Ok(_) => (),
-        Err(_) => server_state.lock().unwrap().state = ServerState::ShutDown,
+        Err(_) => server_state.lock().unwrap().state = ProtocolState::ShutDown,
     };
 }
 
 #[derive(Copy, Clone, PartialEq)]
-pub enum ServerState {
+pub enum ProtocolState {
     Handshaking,
     Status,
     Login,

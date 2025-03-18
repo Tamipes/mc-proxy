@@ -1,9 +1,6 @@
 use std::io::Write;
 
-use crate::{
-    packets::{Packet, SendPacket},
-    types::{UShort, VarInt, VarString},
-};
+use crate::packets::{Packet, SendPacket};
 
 /// id: 0x00
 pub struct StatusRequest {
