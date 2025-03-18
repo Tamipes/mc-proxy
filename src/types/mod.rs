@@ -95,6 +95,7 @@ impl VarInt {
     }
 }
 
+#[derive(Debug)]
 pub struct VarString {
     value: String,
 }

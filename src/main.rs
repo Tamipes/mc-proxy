@@ -300,36 +300,56 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
     let mut server_stream = match TcpStream::connect(server_addr) {
         Ok(x) => x,
         Err(_) => {
-            let client_packet = Packet::parse(&mut client_stream).unwrap();
-            match client_packet.id.get_int() {
-                0 => {
-                    println!("Client STATUS: {:#x} Status Request", 0);
-                }
-                _ => {
-                    println!(
-                        "Client STATUS: {:#x} Unknown Id -> Shutdown",
-                        client_packet.id.get_int()
-                    );
-                    return;
-                }
-            };
+            let state = server_state.lock().unwrap().state;
+            match state {
+                ProtocolState::Handshaking => todo!(),
+                ProtocolState::Status => {
+                    let client_packet = Packet::parse(&mut client_stream).unwrap();
+                    match client_packet.id.get_int() {
+                        0 => {
+                            println!("Client STATUS: {:#x} Status Request", 0);
+                        }
+                        _ => {
+                            println!(
+                                "Client STATUS: {:#x} Unknown Id -> Shutdown",
+                                client_packet.id.get_int()
+                            );
+                            return;
+                        }
+                    };
 
-            let json = StatusJson {
+                    let json = StatusJson {
                 version: StatusVersion {
                     name: "???".to_owned(),
                     protocol: server_state.lock().unwrap().protocol_version,
                 },
                 enforcesSecureChat: false,
                 description: StatusDescription {
-                    text: "Server is currently not online. \nJoin to start it! - Tami with <3"
+                    text: "Server is currently not running. \nJoin to start it! - Tami with <3"
                         .to_owned(),
                 },
                 players: StatusPlayers { max: 1, online: 0 },
             };
-            let status_res = packets::clientbound::status::StatusResponse::set_json(json);
-            status_res.send_packet(&mut client_stream);
-            println!("Server NOT WORKING ->  Disconnecting...");
-            return;
+                    let status_res = packets::clientbound::status::StatusResponse::set_json(json);
+                    status_res.send_packet(&mut client_stream);
+                    println!("Server NOT WORKING ->  Disconnecting...");
+                    return;
+                }
+                ProtocolState::Login => {
+                    let client_packet = Packet::parse(&mut client_stream).unwrap();
+                    //TODO: The underscore bug https://minecraft.wiki/w/Java_Edition_protocol#Type:JSON_Text_Component
+                    let disc_pack = packets::clientbound::login::Disconnect::set_reason(
+                        "Okayyy_starting_it_now_<3".to_owned(),
+                    );
+                    disc_pack.send_packet(&mut client_stream);
+
+                    println!("Server NOT WORKING ->  Disconnecting...");
+                    return;
+                }
+                ProtocolState::Configuration => todo!(),
+                ProtocolState::Play => todo!(),
+                ProtocolState::ShutDown => todo!(),
+            }
         }
     };
     handshake.send_packet(&mut server_stream);
