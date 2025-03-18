@@ -89,13 +89,7 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
             match state {
                 ServerState::Handshaking => {}
                 ServerState::Status => {
-                    let client_packet = match Packet::parse(&mut client_stream) {
-                        Some(x) => x,
-                        None => {
-                            // client_stream.write_all(&mut DISCONNECT.all()).unwrap();
-                            panic!()
-                        }
-                    };
+                    let client_packet = Packet::parse(&mut client_stream).unwrap();
                     match client_packet.id.get_int() {
                         0 => {
                             if status_req {
@@ -110,13 +104,22 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                                 packets::serverbound::status::StatusRequest::parse(client_packet)
                                     .expect("Couldn't parse statusrequest serverbound???");
                             a.send_packet(&mut server_stream);
-                            println!("Client STATUS: {:#x}", 0);
+                            println!("Client STATUS: {:#x} Status Request", 0);
                             status_req = true;
                         }
-                        _ => {
-                            println!("Client STATUS: {:#x}", client_packet.id.get_int());
+                        1 => {
+                            println!("Client STATUS: {:#x} Ping Request (exit)", 1);
                             server_stream.write_all(&client_packet.all).unwrap();
                             server_stream.flush().unwrap();
+                            return;
+                        }
+                        _ => {
+                            println!(
+                                "Client STATUS: {:#x} Unknown Id -> Shutdown",
+                                client_packet.id.get_int()
+                            );
+                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            return;
                         }
                     }
                 }
@@ -134,8 +137,9 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                         .unwrap();
                         if res == 0 {
                             server_state.lock().unwrap().state = ServerState::ShutDown;
-                            println!("Client PLAY: {:#x} -> Shutdown res == 0", 0);
-                            panic!();
+                            server_stream.shutdown(std::net::Shutdown::Both).ok();
+                            client_stream.shutdown(std::net::Shutdown::Both).ok();
+                            println!("Client PLAY: {:#x} -> Shutdown res == 0", -1);
                             return;
                         }
                         let _res = splice(
@@ -149,8 +153,9 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                         .unwrap();
                         if _res == 0 {
                             server_state.lock().unwrap().state = ServerState::ShutDown;
-                            println!("Client PLAY: {:#x} -> Shutdown res == 0", 0);
-                            panic!();
+                            server_stream.shutdown(std::net::Shutdown::Both).ok();
+                            client_stream.shutdown(std::net::Shutdown::Both).ok();
+                            println!("Client PLAY: {:#x} -> Shutdown res == 0", -1);
                             return;
                         }
                     }
@@ -159,15 +164,8 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                     println!("Client SHUTDOWN: by server_status");
                     return;
                 }
-                _ => {
-                    let mut vec = [0];
-                    client_stream.read_exact(&mut vec).unwrap();
-                    server_stream.write_all(&vec).unwrap();
-                    // println!("Client _: {:#x}", client_packet.id.get_int());
-                    // server_stream.write_all(&client_packet.all).unwrap();
-                    // server_stream.flush().unwrap();
-                    // server_stream.flush().unwrap();
-                }
+                ServerState::Configuration => todo!(),
+                ServerState::Play => todo!(),
             }
         }
     });
@@ -183,26 +181,44 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                 }
                 ServerState::Status => {
                     let server_packet = Packet::parse(&mut server_stream_clone).unwrap();
-                    if server_packet.id.get_int() == 0 {
-                        if spam {
+                    match server_packet.id.get_int() {
+                        0 => {
+                            if spam {
+                                server_state_clone.lock().unwrap().state = ServerState::ShutDown;
+                                println!(
+                                    "Server STATUS: {:#x} -> Shutdown; status_request spam",
+                                    0
+                                );
+                                return;
+                            }
+                            let a =
+                                packets::clientbound::status::StatusResponse::parse(server_packet)
+                                    .unwrap();
+                            let mut json = a.get_json().clone();
+                            json.description
+                                .text
+                                .push_str("\n    Rusty proxy <3 version");
+                            let a = packets::clientbound::status::StatusResponse::set_json(json);
+                            a.send_packet(&mut client_stream_clone);
+                            println!(
+                                "Server STATUS: {:#x} Status Response\t{}",
+                                0,
+                                a.get_string()
+                            );
+                            spam = true;
+                        }
+                        1 => {
+                            println!("Server STATUS: {:#x} Pong Response (exit)", 1);
                             server_state_clone.lock().unwrap().state = ServerState::ShutDown;
-                            println!("Server STATUS: {:#x} -> Shutdown; status_request spam", 0);
+                            client_stream_clone.write_all(&server_packet.all).unwrap();
+                            client_stream_clone.flush().unwrap();
                             return;
                         }
-                        let a = packets::clientbound::status::StatusResponse::parse(server_packet)
-                            .unwrap();
-                        let mut json = a.get_json().clone();
-                        json.description
-                            .text
-                            .push_str("\n    Rusty proxy <3 version");
-                        let a = packets::clientbound::status::StatusResponse::set_json(json);
-                        a.send_packet(&mut client_stream_clone);
-                        println!("Server STATUS: {:#x} StatusResponse\t{}", 0, a.get_string());
-                        spam = true;
-                    } else {
-                        println!("Server STATUS: {:#x}", server_packet.id.get_int());
-                        client_stream_clone.write_all(&server_packet.all).unwrap();
-                        client_stream_clone.flush().unwrap();
+                        _ => {
+                            println!("Server STATUS: {:#x}", server_packet.id.get_int());
+                            client_stream_clone.write_all(&server_packet.all).unwrap();
+                            client_stream_clone.flush().unwrap();
+                        }
                     }
                 }
                 ServerState::Login => {
@@ -219,7 +235,9 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                         .unwrap();
                         if res == 0 {
                             server_state_clone.lock().unwrap().state = ServerState::ShutDown;
-                            println!("Client PLAY: {:#x} -> Shutdown res == 0", -1);
+                            server_stream_clone.shutdown(std::net::Shutdown::Both).ok();
+                            client_stream_clone.shutdown(std::net::Shutdown::Both).ok();
+                            println!("Server PLAY: {:#x} -> Shutdown res == 0", -1);
                             return;
                         }
                         let _res = splice(
@@ -233,7 +251,9 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                         .unwrap();
                         if _res == 0 {
                             server_state_clone.lock().unwrap().state = ServerState::ShutDown;
-                            println!("Client PLAY: {:#x} -> Shutdown res == 0", -1);
+                            server_stream_clone.shutdown(std::net::Shutdown::Both).ok();
+                            client_stream_clone.shutdown(std::net::Shutdown::Both).ok();
+                            println!("Server PLAY: {:#x} -> Shutdown res == 0", -1);
                             return;
                         }
                     }
@@ -242,16 +262,8 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
                     println!("Server SHUTDOWN: by server_status");
                     return;
                 }
-                _ => {
-                    let mut vec = [0];
-                    server_stream_clone.read(&mut vec).unwrap();
-                    client_stream_clone.write(&vec).unwrap();
-
-                    // let server_packet = Packet::parse(&mut server_stream_clone).unwrap();
-                    // println!("Server _: {:#x}", server_packet.id.get_int());
-                    // client_stream_clone.write_all(&server_packet.all).unwrap();
-                    // client_stream_clone.flush().unwrap();
-                }
+                ServerState::Configuration => todo!(),
+                ServerState::Play => todo!(),
             };
         }
     });
