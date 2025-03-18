@@ -1,5 +1,7 @@
 use std::io::Write;
 
+use nix::NixPath;
+
 use crate::{
     packets::{Packet, SendPacket},
     types::{UShort, VarInt, VarString},
@@ -34,6 +36,28 @@ impl Handshake {
     }
     pub fn get_next_state(&self) -> i32 {
         self.next_state.get_int()
+    }
+
+    pub fn create(
+        protocol_version: VarInt,
+        server_address: VarString,
+        server_port: UShort,
+        next_state: VarInt,
+    ) -> Handshake {
+        let mut vec = VarInt::from(0).get_data();
+        vec.append(&mut protocol_version.get_data());
+        vec.append(&mut server_address.get_data());
+        vec.append(&mut server_port.get_data());
+        vec.append(&mut next_state.get_data());
+        let mut all = VarInt::from(vec.len() as i32).get_data();
+        all.append(&mut vec);
+        Handshake {
+            protocol_version,
+            server_address,
+            server_port,
+            next_state,
+            all,
+        }
     }
 }
 

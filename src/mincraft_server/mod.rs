@@ -1,48 +1,105 @@
 use std::{
     io::Write,
-    net::{SocketAddr, TcpListener, TcpStream},
-    os::fd::AsFd,
-    process::{Command, Stdio},
+    net::{TcpListener, TcpStream},
+    process::{ChildStdin, Command, Stdio},
     sync::{Arc, Mutex},
-    thread::{self, JoinHandle},
+    thread::{self},
+    time,
 };
 
-use nix::fcntl::{splice, SpliceFFlags};
-use nix::unistd::pipe;
-
 use crate::{
-    packets::{self, clientbound::status::*, Packet, SendPacket},
-    Args, ClientConnectionState, ProtocolState,
+    packets::{self, SendPacket},
+    types::*,
 };
 
 pub struct MinecraftServerHandler {
     start_command: String,
     pub running: bool,
     listener: TcpListener,
+    pub addr: String,
+    mc_server_stdin: Option<ChildStdin>,
 }
 
 impl MinecraftServerHandler {
-    pub fn create(start_command: String, listener: TcpListener) -> MinecraftServerHandler {
+    pub fn create(
+        start_command: String,
+        listener: TcpListener,
+        addr: String,
+    ) -> MinecraftServerHandler {
         MinecraftServerHandler {
             start_command,
             running: false,
             listener,
+            addr,
+            mc_server_stdin: None,
         }
     }
-    pub fn run(self, args: Args) {}
+    pub fn start_polling(mc_server_handler: Arc<Mutex<MinecraftServerHandler>>) {
+        thread::spawn(move || loop {
+            thread::sleep(time::Duration::from_secs(10 * 60));
+            println!("PROXY: starting poll");
+            let mut server = mc_server_handler.lock().unwrap();
+            if server.running {
+                match server.query_server() {
+                    Some(x) => {
+                        if !x {
+                            server.stop_mc_server();
+                            println!("Proxy: Stopping minecraft server!");
+                            return;
+                        }
+                    }
+                    None => return,
+                }
+            }
+        });
+    }
+    pub fn query_server(&self) -> Option<bool> {
+        match TcpStream::connect(self.addr.clone()) {
+            //TODO: fixx this ok part
+            Ok(mut stream_server) => {
+                let handshake = packets::serverbound::handshake::Handshake::create(
+                    VarInt::from(746),
+                    VarString::from(self.addr.clone()),
+                    UShort::from(1234),
+                    VarInt::from(1),
+                );
+                handshake.send_packet(&mut stream_server);
+                let status_rq = packets::Packet::from_bytes(0, Vec::new());
+                status_rq.send_packet(&mut stream_server);
+                let return_packet = packets::Packet::parse(&mut stream_server).unwrap();
+                let status_response =
+                    packets::clientbound::status::StatusResponse::parse(return_packet).unwrap();
+                Some(status_response.get_json().players.online != 0)
+            }
+            Err(_) => None,
+        }
+    }
+    pub fn stop_mc_server(&mut self) -> Option<()> {
+        self.mc_server_stdin
+            .as_mut()?
+            .write_all("stop\n".to_owned().as_bytes())
+            .unwrap();
+        self.running = false;
+        Some(())
+    }
 }
 
 pub fn start_minecraft(mc_server_handler: Arc<Mutex<MinecraftServerHandler>>) {
+    let selfo = mc_server_handler.clone();
     let mut cmd = Command::new(mc_server_handler.lock().unwrap().start_command.clone())
         // .arg("ssh://root@elaina.tami.moe")
+        .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
         .expect("Some error with running the minecraft-server.");
-    mc_server_handler.lock().unwrap().running = true;
-    let selfo = mc_server_handler.clone();
+    let mc_server = mc_server_handler.clone();
+    let mut mc_server = mc_server.lock().unwrap();
+    mc_server.running = true;
+    mc_server.mc_server_stdin = Some(cmd.stdin.take().unwrap());
     std::thread::spawn(move || {
         cmd.wait().unwrap();
         selfo.lock().unwrap().running = false;
     });
+    MinecraftServerHandler::start_polling(mc_server_handler);
 }

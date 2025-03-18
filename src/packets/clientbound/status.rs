@@ -47,6 +47,7 @@ pub struct StatusPlayers {
 }
 
 /// id: 0x00
+#[derive(Debug)]
 pub struct StatusResponse {
     json: VarString,
     all: Vec<u8>,

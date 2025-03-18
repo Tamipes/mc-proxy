@@ -40,6 +40,7 @@ fn main() {
     let mc_server_handler = Arc::new(Mutex::new(MinecraftServerHandler::create(
         args.start_command.clone(),
         listener.try_clone().unwrap(),
+        args.proxy_to.clone(),
     )));
 
     println!("Listening for connections!");
@@ -47,10 +48,10 @@ fn main() {
         match listener.accept() {
             Ok((str, addr)) => {
                 println!("{addr} -- Connected");
-                proxy_client(mc_server_handler.clone(), str, addr, args.proxy_to.clone());
+                proxy_client(mc_server_handler.clone(), str, addr);
                 println!("{addr} -- Disconnected");
             }
-            Err(err) => eprintln!("Error encountered while resolving connection: {err}"),
+            Err(err) => eprintln!("Error encountered while resolving listener connection: {err}"),
         }
     }
 }
@@ -58,7 +59,6 @@ pub fn proxy_client(
     mc_server_handler: Arc<Mutex<MinecraftServerHandler>>,
     mut client_stream: TcpStream,
     client_addr: SocketAddr,
-    mc_addr: String,
 ) {
     thread::spawn(move || {
         let client_packet = match Packet::parse(&mut client_stream) {
@@ -79,7 +79,7 @@ pub fn proxy_client(
                 None => {
                     println!(
                         "Client HANDSHAKE: {:#x} Transfer??? Disconnecting...",
-                        &handshake.next_state.get_int()
+                        handshake.get_next_state()
                     );
                     return;
                 }
@@ -88,6 +88,7 @@ pub fn proxy_client(
             println!("Client HANDSHAKE -> bad packet; Disconnecting...");
             return;
         }
+        let mc_addr = mc_server_handler.lock().unwrap().addr.clone();
         let mut server_stream = match TcpStream::connect(mc_addr) {
             Ok(x) => x,
             Err(_) => {
@@ -141,7 +142,7 @@ pub fn proxy_client(
                                 }
                             };
                         }
-                        println!("Server NOT WORKING ->  Disconnecting...");
+                        println!("Server NOT ONLINE ->  Disconnecting...");
                         return;
                     }
                     ProtocolState::Login => {
@@ -150,11 +151,11 @@ pub fn proxy_client(
                         let disc_pack;
                         if mc_server_handler.lock().unwrap().running {
                             disc_pack = packets::clientbound::login::Disconnect::set_reason(
-                                "It_is_still_starting_<3".to_owned(),
+                                "Starting...§d<3§r".to_owned(),
                             );
                         } else {
                             disc_pack = packets::clientbound::login::Disconnect::set_reason(
-                                "Okayyy_starting_it_now_<3".to_owned(),
+                                "Okayyy_starting_it_now...§d<3§r".to_owned(),
                             );
                         }
                         disc_pack.send_packet(&mut client_stream);

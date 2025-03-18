@@ -20,9 +20,11 @@ impl VarInt {
         self.value
     }
 
+    /// Clones the data for use, the sturct is still usable.
     pub fn get_data(&self) -> Vec<u8> {
         self.data.clone()
     }
+    /// Moves the data out from the struct. Struct is useless later.
     pub fn move_data(self) -> Vec<u8> {
         self.data
     }
@@ -105,7 +107,13 @@ impl VarString {
         self.value.clone()
     }
     pub fn move_data(self) -> Vec<u8> {
-        let mut vec = VarInt::from(self.value.len() as i32).get_data();
+        let mut vec = VarInt::from(self.value.len() as i32).move_data();
+        vec.append(&mut (Vec::from(self.value.as_bytes())));
+        vec
+    }
+
+    pub fn get_data(&self) -> Vec<u8> {
+        let mut vec = VarInt::from(self.value.len() as i32).move_data();
         vec.append(&mut (Vec::from(self.value.as_bytes())));
         vec
     }
@@ -136,6 +144,9 @@ impl UShort {
     pub fn get_value(&self) -> u16 {
         self.value
     }
+    pub fn get_data(&self) -> Vec<u8> {
+        self.data.clone()
+    }
     pub fn parse<I>(data: &mut I) -> Option<UShort>
     where
         I: Iterator<Item = u8>,
@@ -149,5 +160,13 @@ impl UShort {
             value: int,
             data: vec,
         })
+    }
+    pub fn from(short: u16) -> UShort {
+        let mut vec = vec![(short >> 8) as u8];
+        vec.push(((short >> 8) << 8) as u8);
+        UShort {
+            value: short,
+            data: vec,
+        }
     }
 }
