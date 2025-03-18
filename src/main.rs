@@ -17,15 +17,29 @@ use types::*;
 use nix::fcntl::{splice, SpliceFFlags};
 use nix::unistd::pipe;
 
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Addr to bind to
+    #[arg(long, short, default_value = "127.0.0.1:7878")]
+    bind_addr: String,
+    #[arg(default_value = "127.0.0.1:25565")]
+    proxy_to: String,
+}
+
 fn main() {
-    let listener = TcpListener::bind("127.0.0.1:7878").expect("Can't bind to address");
+    let args = Args::parse();
+    dbg!(&args);
+    let listener = TcpListener::bind(&args.bind_addr).expect("Can't bind to address");
     println!("Listening for connections!");
 
     loop {
         match listener.accept() {
             Ok((str, addr)) => {
                 println!("{addr} -- Connected");
-                proxy(str, addr);
+                proxy(str, addr, &args.proxy_to);
                 // handle_connection(str, addr);
                 println!("{addr} -- Disconnected");
             }
@@ -46,8 +60,8 @@ struct ConnectionState {
     motd: String,
 }
 const BUF_SIZE: usize = 1024 * 512;
-fn proxy(mut client_stream: TcpStream, addr: SocketAddr) {
-    let mut server_stream = TcpStream::connect("127.0.0.1:25565").unwrap();
+fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
+    let mut server_stream = TcpStream::connect(server_addr).unwrap();
     let mut server_stream_clone = server_stream.try_clone().unwrap();
     let mut client_stream_clone = client_stream.try_clone().unwrap();
     let server_state = Arc::new(Mutex::new(ConnectionState {
