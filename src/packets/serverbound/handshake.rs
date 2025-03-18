@@ -7,10 +7,10 @@ use crate::{
 
 /// id: 0x00
 pub struct Handshake {
-    protocol_version: VarInt,
-    server_address: VarString,
-    server_port: UShort,
-    next_state: VarInt,
+    pub protocol_version: VarInt,
+    pub server_address: VarString,
+    pub server_port: UShort,
+    pub next_state: VarInt,
     all: Vec<u8>,
 }
 

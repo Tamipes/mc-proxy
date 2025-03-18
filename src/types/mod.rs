@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 const SEGMENT_BITS: u8 = 0x7F;
 const CONTINUE_BIT: u8 = 0x80;
 
@@ -5,6 +7,12 @@ const CONTINUE_BIT: u8 = 0x80;
 pub struct VarInt {
     value: i32,
     data: Vec<u8>,
+}
+
+impl Display for VarInt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value)
+    }
 }
 
 impl VarInt {

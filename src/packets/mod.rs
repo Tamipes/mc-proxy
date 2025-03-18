@@ -54,7 +54,7 @@ impl Packet {
                 return None;
             }
         };
-        // println!("---id: {packet_id}");
+        // println!("---id: {id}");
         if id.get_int() == 122 {
             return None;
         }

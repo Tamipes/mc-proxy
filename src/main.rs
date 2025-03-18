@@ -2,16 +2,20 @@ extern crate nix;
 
 use core::panic;
 use std::{
-    io::{BufReader, Read, Write},
+    io::Write,
     net::{SocketAddr, TcpListener, TcpStream},
     os::fd::AsFd,
     sync::{Arc, Mutex},
-    thread,
+    thread::{self, JoinHandle},
 };
 
 mod packets;
 mod types;
-use packets::{Packet, SendPacket};
+use packets::{
+    clientbound::status::{StatusDescription, StatusJson, StatusPlayers, StatusVersion},
+    serverbound::handshake::Handshake,
+    Packet, SendPacket,
+};
 use types::*;
 
 use nix::fcntl::{splice, SpliceFFlags};
@@ -31,7 +35,6 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    dbg!(&args);
     let listener = TcpListener::bind(&args.bind_addr).expect("Can't bind to address");
     println!("Listening for connections!");
 
@@ -58,45 +61,24 @@ macro_rules! unwrap_or_return {
 struct ConnectionState {
     state: ServerState,
     motd: String,
+    protocol_version: i32,
+}
+impl ConnectionState {
+    pub fn create(hand: &Handshake, state: ServerState) -> Arc<Mutex<ConnectionState>> {
+        Arc::new(Mutex::new(ConnectionState {
+            state,
+            motd: "Proxy rust <3".to_owned(),
+            protocol_version: hand.protocol_version.get_int(),
+        }))
+    }
 }
 const BUF_SIZE: usize = 1024 * 512;
-fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
-    let mut server_stream = TcpStream::connect(server_addr).unwrap();
-    let mut server_stream_clone = server_stream.try_clone().unwrap();
-    let mut client_stream_clone = client_stream.try_clone().unwrap();
-    let server_state = Arc::new(Mutex::new(ConnectionState {
-        state: ServerState::Handshaking,
-        motd: "Rust proxy <3".to_string(),
-    }));
-    let server_state_clone = server_state.clone();
-    let server_state_clone_clone = server_state.clone();
-
-    let handshake_packet = Packet::parse(&mut client_stream).unwrap();
-    if handshake_packet.id.get_int() == 0 {
-        let a = packets::serverbound::handshake::Handshake::parse(handshake_packet)
-            .expect("Handshake request from client failed to parse");
-        a.send_packet(&mut server_stream);
-        match a.get_next_state() {
-            1 => {
-                server_state.lock().unwrap().state = ServerState::Status;
-                println!("Client HANDSHAKE: {:#x} -> Status", 0);
-            }
-            2 => {
-                server_state.lock().unwrap().state = ServerState::Login;
-                println!("Client HANDSHAKE: {:#x} -> Login", 0);
-            }
-            _ => {
-                server_state.lock().unwrap().state = ServerState::ShutDown;
-                println!("Client HANDSHAKE: {:#x} -> Transfer??? noo shutdown", 0);
-                return;
-            }
-        }
-    } else {
-        println!("Bad handshake by client...");
-        panic!();
-    }
-
-    let client_handle = thread::spawn(move || {
+fn client_proxy(
+    mut client_stream: TcpStream,
+    mut server_stream: TcpStream,
+    mut server_state: Arc<Mutex<ConnectionState>>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
         let mut status_req = false;
         loop {
             let state = server_state.lock().unwrap().state.clone();
@@ -182,11 +164,18 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
                 ServerState::Play => todo!(),
             }
         }
-    });
-    let server_handle = thread::spawn(move || {
+    })
+}
+
+fn server_proxy(
+    mut client_stream: TcpStream,
+    mut server_stream: TcpStream,
+    mut server_state: Arc<Mutex<ConnectionState>>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
         let mut spam = false;
         loop {
-            let state = server_state_clone.lock().unwrap().state.clone();
+            let state = server_state.lock().unwrap().state.clone();
 
             match state {
                 ServerState::Handshaking => {
@@ -194,11 +183,11 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
                     panic!();
                 }
                 ServerState::Status => {
-                    let server_packet = Packet::parse(&mut server_stream_clone).unwrap();
+                    let server_packet = Packet::parse(&mut server_stream).unwrap();
                     match server_packet.id.get_int() {
                         0 => {
                             if spam {
-                                server_state_clone.lock().unwrap().state = ServerState::ShutDown;
+                                server_state.lock().unwrap().state = ServerState::ShutDown;
                                 println!(
                                     "Server STATUS: {:#x} -> Shutdown; status_request spam",
                                     0
@@ -213,7 +202,7 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
                                 .text
                                 .push_str("\n    Rusty proxy <3 version");
                             let a = packets::clientbound::status::StatusResponse::set_json(json);
-                            a.send_packet(&mut client_stream_clone);
+                            a.send_packet(&mut client_stream);
                             println!(
                                 "Server STATUS: {:#x} Status Response\t{}",
                                 0,
@@ -223,15 +212,15 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
                         }
                         1 => {
                             println!("Server STATUS: {:#x} Pong Response (exit)", 1);
-                            server_state_clone.lock().unwrap().state = ServerState::ShutDown;
-                            client_stream_clone.write_all(&server_packet.all).unwrap();
-                            client_stream_clone.flush().unwrap();
+                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            client_stream.write_all(&server_packet.all).unwrap();
+                            client_stream.flush().unwrap();
                             return;
                         }
                         _ => {
                             println!("Server STATUS: {:#x}", server_packet.id.get_int());
-                            client_stream_clone.write_all(&server_packet.all).unwrap();
-                            client_stream_clone.flush().unwrap();
+                            client_stream.write_all(&server_packet.all).unwrap();
+                            client_stream.flush().unwrap();
                         }
                     }
                 }
@@ -239,7 +228,7 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
                     let (rd, wr) = pipe().unwrap();
                     loop {
                         let res = splice(
-                            server_stream_clone.as_fd(),
+                            server_stream.as_fd(),
                             None,
                             wr.try_clone().unwrap(),
                             None,
@@ -248,25 +237,25 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
                         )
                         .unwrap();
                         if res == 0 {
-                            server_state_clone.lock().unwrap().state = ServerState::ShutDown;
-                            server_stream_clone.shutdown(std::net::Shutdown::Both).ok();
-                            client_stream_clone.shutdown(std::net::Shutdown::Both).ok();
+                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            server_stream.shutdown(std::net::Shutdown::Both).ok();
+                            client_stream.shutdown(std::net::Shutdown::Both).ok();
                             println!("Server PLAY: {:#x} -> Shutdown res == 0", -1);
                             return;
                         }
                         let _res = splice(
                             rd.try_clone().unwrap(),
                             None,
-                            client_stream_clone.as_fd(),
+                            client_stream.as_fd(),
                             None,
                             BUF_SIZE,
                             SpliceFFlags::empty(),
                         )
                         .unwrap();
                         if _res == 0 {
-                            server_state_clone.lock().unwrap().state = ServerState::ShutDown;
-                            server_stream_clone.shutdown(std::net::Shutdown::Both).ok();
-                            client_stream_clone.shutdown(std::net::Shutdown::Both).ok();
+                            server_state.lock().unwrap().state = ServerState::ShutDown;
+                            server_stream.shutdown(std::net::Shutdown::Both).ok();
+                            client_stream.shutdown(std::net::Shutdown::Both).ok();
                             println!("Server PLAY: {:#x} -> Shutdown res == 0", -1);
                             return;
                         }
@@ -280,93 +269,97 @@ fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
                 ServerState::Play => todo!(),
             };
         }
-    });
-    match client_handle.join() {
-        Ok(_) => (),
-        Err(_) => server_state_clone_clone.lock().unwrap().state = ServerState::ShutDown,
-    };
-    match server_handle.join() {
-        Ok(_) => (),
-        Err(_) => server_state_clone_clone.lock().unwrap().state = ServerState::ShutDown,
-    };
+    })
 }
 
-fn handle_connection(mut stream: TcpStream, addr: SocketAddr) {
-    println!("{addr} -- Connection established");
-    let mut server_state = ServerState::Handshaking;
-
-    let handshake = unwrap_or_return!(Packet::parse(&mut stream));
-    if handshake.id.get_int() != 0 {
-        println!("{addr} -- Not a modern handshake");
-        return;
-    }
-    let mut data_iter = handshake.data.clone().into_iter();
-    let version = VarInt::read(&mut data_iter).unwrap();
-    println!("Version: {version}");
-    let hostname = VarString::parse(&mut data_iter).unwrap();
-    let port = UShort::parse(&mut data_iter).unwrap();
-    let next_state = VarInt::read(&mut data_iter).unwrap();
-    println!("{addr} -- Packet: {}", handshake.proto_name(&server_state));
-    server_state = match next_state {
-        1 => ServerState::Status,
-        // 2 => "(2)Login",
-        // 3 => "(3)Transfer",
-        _ => {
-            eprintln!("{addr} -- Error for `next_status` in handshake packet");
+fn proxy(mut client_stream: TcpStream, addr: SocketAddr, server_addr: &String) {
+    let client_packet = match Packet::parse(&mut client_stream) {
+        Some(x) => x,
+        None => {
+            println!("Client HANDSHAKE -> bad packet; Disconnecting...");
             return;
         }
     };
 
-    match server_state {
-        ServerState::Handshaking => todo!(),
-        ServerState::Status => {
-            let packet = Packet::parse(&mut stream).unwrap();
-            println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
-            if packet.id.get_int() == 0 {
-                //Respond pls
-                let status_payload = StatusPayload {
-                    description: format!(
-                        "Proxy in Rust <3\n{}:{}",
-                        hostname.get_value(),
-                        port.get_value()
-                    ),
-                    protocol_version: version,
-                };
-                let mut a = VarString::from(status_payload.to_string()).move_data();
-                let mut vec = VarInt::from(a.len() as i32 + 1).get_data();
-                vec.append(&mut VarInt::from(0).get_data());
-                vec.append(&mut a);
-                stream.write_all(&vec).unwrap();
-                stream.flush().unwrap();
-                println!("{addr} -- response packet sent");
-                let packet = Packet::parse(&mut stream).unwrap();
-                if packet.id.get_int() == 1 {
-                    println!("{addr} -- Packet: {}", packet.proto_name(&server_state));
-                    stream.write(&[9, 1]).unwrap();
-                    stream.write_all(&packet.data).unwrap();
-                    stream.flush().unwrap();
-                } else {
-                    println!("ERRORRRR");
-                }
+    let handshake;
+    let server_state;
+    if client_packet.id.get_int() == 0 {
+        handshake = packets::serverbound::handshake::Handshake::parse(client_packet)
+            .expect("Handshake request from client failed to parse");
+        match handshake.get_next_state() {
+            1 => {
+                server_state = ConnectionState::create(&handshake, ServerState::Status);
+                println!("Client HANDSHAKE: {:#x} -> Status", 0);
+            }
+            2 => {
+                server_state = ConnectionState::create(&handshake, ServerState::Login);
+                println!("Client HANDSHAKE: {:#x} -> Login", 0);
+            }
+            3 => {
+                println!("Client HANDSHAKE: {:#x} -> Transfer??? noo shutdown", 0);
+                return;
+            }
+            _ => {
+                println!("Client HANDSHAKE: {:#x} -> bad packet? Shutdown", 0);
+                return;
             }
         }
-        _ => todo!(),
+    } else {
+        println!("Client HANDSHAKE -> bad packet; Disconnecting...");
+        return;
     }
-    println!("{addr} -- Reached the end of the implementation")
-}
+    let mut server_stream = match TcpStream::connect(server_addr) {
+        Ok(x) => x,
+        Err(_) => {
+            let client_packet = Packet::parse(&mut client_stream).unwrap();
+            match client_packet.id.get_int() {
+                0 => {
+                    println!("Client STATUS: {:#x} Status Request", 0);
+                }
+                _ => {
+                    println!(
+                        "Client STATUS: {:#x} Unknown Id -> Shutdown",
+                        client_packet.id.get_int()
+                    );
+                    return;
+                }
+            };
 
-//Just for sanity checks
-const JSON_PAYLOAD: &str = "{\"version\":{\"name\":\"1.20.1\",\"protocol\":763},\"enforcesSecureChat\":true,\"description\":\"Proxy in rust <3\",\"players\":{\"max\":20,\"online\":0}}";
+            let json = StatusJson {
+                version: StatusVersion {
+                    name: "???".to_owned(),
+                    protocol: handshake.protocol_version.get_int(),
+                },
+                enforcesSecureChat: false,
+                description: StatusDescription {
+                    text: "Server is currently not online. \nJoin to start it!".to_owned(),
+                },
+                players: StatusPlayers { max: 1, online: 0 },
+            };
+            let status_res = packets::clientbound::status::StatusResponse::set_json(json);
+            status_res.send_packet(&mut client_stream);
+            client_stream.shutdown(std::net::Shutdown::Both).unwrap();
+            client_stream.flush().unwrap();
+            println!("Server NOT WORKING ->  Disconnecting...");
+            return;
+        }
+    };
+    handshake.send_packet(&mut server_stream);
 
-struct StatusPayload {
-    description: String,
-    protocol_version: i32,
-}
-
-impl StatusPayload {
-    fn to_string(&self) -> String {
-        format!("{{\"version\":{{\"name\":\"1.20.1\",\"protocol\":{0}}},\"enforcesSecureChat\":true,\"description\":\"{1}\",\"players\":{{\"max\":20,\"online\":0}}}}",self.protocol_version,self.description)
-    }
+    let client_handle = client_proxy(
+        client_stream.try_clone().unwrap(),
+        server_stream.try_clone().unwrap(),
+        server_state.clone(),
+    );
+    let server_handle = server_proxy(client_stream, server_stream, server_state.clone());
+    match client_handle.join() {
+        Ok(_) => (),
+        Err(_) => server_state.lock().unwrap().state = ServerState::ShutDown,
+    };
+    match server_handle.join() {
+        Ok(_) => (),
+        Err(_) => server_state.lock().unwrap().state = ServerState::ShutDown,
+    };
 }
 
 #[derive(Copy, Clone, PartialEq)]
