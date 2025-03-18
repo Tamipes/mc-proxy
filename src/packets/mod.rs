@@ -1,5 +1,8 @@
 use crate::{types::*, ProtocolState};
-use std::{io::Read, net::TcpStream};
+use std::{
+    io::{Read, Write},
+    net::TcpStream,
+};
 pub mod clientbound;
 pub mod serverbound;
 
@@ -12,6 +15,12 @@ pub struct Packet {
 }
 pub trait SendPacket {
     fn send_packet(&self, stream: &mut TcpStream);
+}
+
+impl SendPacket for Packet {
+    fn send_packet(&self, stream: &mut TcpStream) {
+        stream.write_all(&self.all).unwrap();
+    }
 }
 
 impl Packet {

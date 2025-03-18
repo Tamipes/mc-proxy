@@ -14,6 +14,22 @@ pub struct StatusJson {
     pub description: StatusDescription,
     pub players: StatusPlayers,
 }
+impl StatusJson {
+    pub fn create() -> StatusJson {
+        StatusJson {
+            version: StatusVersion {
+                name: "???".to_owned(),
+                protocol: -1,
+            },
+            enforcesSecureChat: false,
+            description: StatusDescription {
+                text: "Proxy default config".to_owned(),
+            },
+            players: StatusPlayers { max: 0, online: 0 },
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct StatusDescription {
     pub text: String,
