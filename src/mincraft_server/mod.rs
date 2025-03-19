@@ -44,12 +44,15 @@ impl MinecraftServerHandler {
                     Some(x) => {
                         if !x {
                             server.stop_mc_server();
-                            println!("Proxy: Stopping minecraft server!");
+                            println!("PROXY: Stopping minecraft server!");
                             return;
                         }
                     }
-                    None => return,
-                }
+                    None => {
+                        println!("PROXY: server is not running? we should stop this");
+                        return;
+                    }
+                };
             }
         });
     }
@@ -66,7 +69,7 @@ impl MinecraftServerHandler {
                 handshake.send_packet(&mut stream_server);
                 let status_rq = packets::Packet::from_bytes(0, Vec::new());
                 status_rq.send_packet(&mut stream_server);
-                let return_packet = packets::Packet::parse(&mut stream_server).unwrap();
+                let return_packet = packets::Packet::parse(&mut stream_server)?;
                 let status_response =
                     packets::clientbound::status::StatusResponse::parse(return_packet).unwrap();
                 Some(status_response.get_json().players.online != 0)
