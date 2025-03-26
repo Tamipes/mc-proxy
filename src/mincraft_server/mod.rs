@@ -89,7 +89,8 @@ impl MinecraftServerHandler {
 
 pub fn start_minecraft(mc_server_handler: Arc<Mutex<MinecraftServerHandler>>) {
     let selfo = mc_server_handler.clone();
-    let mut cmd = Command::new(mc_server_handler.lock().unwrap().start_command.clone())
+    let mut cmd = Command::new("bash")
+        .arg(mc_server_handler.lock().unwrap().start_command.clone())
         // .arg("ssh://root@elaina.tami.moe")
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
