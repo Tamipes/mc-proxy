@@ -64,8 +64,8 @@ impl StatusResponse {
     pub fn get_string(&self) -> String {
         self.json.get_value()
     }
-    pub fn get_json(&self) -> StatusJson {
-        serde_json::from_str(&self.json.get_value()).unwrap()
+    pub fn get_json(&self) -> Option<StatusJson> {
+        serde_json::from_str(&self.json.get_value()).ok()
     }
     pub fn set_json(json: StatusJson) -> StatusResponse {
         let vec = VarString::from(serde_json::to_string(&json).unwrap()).move_data();

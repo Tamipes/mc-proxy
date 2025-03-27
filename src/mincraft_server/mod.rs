@@ -72,7 +72,13 @@ impl MinecraftServerHandler {
                 let return_packet = packets::Packet::parse(&mut stream_server)?;
                 let status_response =
                     packets::clientbound::status::StatusResponse::parse(return_packet).unwrap();
-                Some(status_response.get_json().players.online != 0)
+                match status_response.get_json() {
+                    Some(x) => Some(x.players.online != 0),
+                    None => {
+                        println!("PROXY: Erroroooooor quering the amount of players...");
+                        Some(true)
+                    }
+                }
             }
             Err(_) => None,
         }

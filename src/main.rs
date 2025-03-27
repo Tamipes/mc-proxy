@@ -313,14 +313,15 @@ fn server_proxy_thread(
                                 );
                                 return;
                             }
-                            let a =
+                            let mut a =
                                 packets::clientbound::status::StatusResponse::parse(server_packet)
                                     .unwrap();
-                            let mut json = a.get_json().clone();
-                            json.description
-                                .text
-                                .push_str("\n    §dRusty proxy <3 version§r");
-                            let a = packets::clientbound::status::StatusResponse::set_json(json);
+                            if let Some(mut json) = a.get_json().clone() {
+                                json.description
+                                    .text
+                                    .push_str("\n    §dRusty proxy <3 version§r");
+                                a = packets::clientbound::status::StatusResponse::set_json(json);
+                            }
                             a.send_packet(&mut client_stream);
                             println!(
                                 "Server STATUS: {:#x} Status Response\t{}",
