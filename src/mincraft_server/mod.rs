@@ -44,12 +44,14 @@ impl MinecraftServerHandler {
                     Some(x) => {
                         if !x {
                             server.stop_mc_server();
-                            println!("PROXY: Stopping minecraft server!");
+                            println!("PROXY: polling: server is empty; Shutting down");
                             return;
+                        } else {
+                            println!("PROXY: polling: server is up and running")
                         }
                     }
                     None => {
-                        println!("PROXY: server is not running? we should stop this");
+                        println!("PROXY: polling:  server is not running? we should stop this");
                         return;
                     }
                 };
@@ -75,7 +77,7 @@ impl MinecraftServerHandler {
                 match status_response.get_json() {
                     Some(x) => Some(x.players.online != 0),
                     None => {
-                        println!("PROXY: Erroroooooor quering the amount of players...");
+                        println!("PROXY: query: Erroroooooor quering the amount of players...");
                         Some(true)
                     }
                 }
@@ -88,7 +90,6 @@ impl MinecraftServerHandler {
             .as_mut()?
             .write_all("stop\n".to_owned().as_bytes())
             .unwrap();
-        self.running = false;
         Some(())
     }
 }

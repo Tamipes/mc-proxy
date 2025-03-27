@@ -125,13 +125,13 @@ impl VarString {
     where
         I: Iterator<Item = u8>,
     {
-        let length = VarInt::read(data).unwrap();
+        let length = VarInt::read(data)?;
         let mut vec = Vec::new();
         for _ in 0..length {
-            vec.push(data.next().unwrap());
+            vec.push(data.next()?);
         }
         Some(VarString {
-            value: String::from_utf8(vec).unwrap(),
+            value: String::from_utf8(vec).ok()?,
         })
     }
 }
@@ -151,10 +151,10 @@ impl UShort {
     where
         I: Iterator<Item = u8>,
     {
-        let mut vec = vec![data.next().unwrap()];
+        let mut vec = vec![data.next()?];
         let mut int: u16 = vec[0] as u16;
         int = int << 8;
-        vec.push(data.next().unwrap());
+        vec.push(data.next()?);
         int |= vec[1] as u16;
         Some(UShort {
             value: int,

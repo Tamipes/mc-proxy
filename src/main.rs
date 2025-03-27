@@ -321,6 +321,9 @@ fn server_proxy_thread(
                                     .text
                                     .push_str("\n    §dRusty proxy <3 version§r");
                                 a = packets::clientbound::status::StatusResponse::set_json(json);
+                            } else {
+                                println!("Server STATUS: {}", a.get_string());
+                                println!("Server STATUS: Failed to parse status response json... continuing without parsing");
                             }
                             a.send_packet(&mut client_stream);
                             println!(

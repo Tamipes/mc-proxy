@@ -10,7 +10,7 @@ use crate::{
 #[derive(Serialize, Deserialize, Clone)]
 pub struct StatusJson {
     pub version: StatusVersion,
-    pub enforcesSecureChat: bool,
+    pub enforcesSecureChat: Option<bool>,
     pub description: StatusDescription,
     pub players: StatusPlayers,
 }
@@ -21,7 +21,7 @@ impl StatusJson {
                 name: "???".to_owned(),
                 protocol: -1,
             },
-            enforcesSecureChat: false,
+            enforcesSecureChat: Some(false),
             description: StatusDescription {
                 text: "Proxy default config".to_owned(),
             },
