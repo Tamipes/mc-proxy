@@ -19,7 +19,7 @@ use nix::{
     unistd::pipe,
 };
 use packets::{
-    clientbound::status::StatusJson, serverbound::handshake::Handshake, Packet, SendPacket,
+    clientbound::status::StatusStructNew, serverbound::handshake::Handshake, Packet, SendPacket,
 };
 
 #[derive(Parser, Debug)]
@@ -110,7 +110,7 @@ pub fn proxy_client(
                             }
                         };
 
-                        let mut json = StatusJson::create();
+                        let mut json = StatusStructNew::create();
                         json.version.protocol = server_state.lock().unwrap().protocol_version;
                         json.players.max = 1;
                         if mc_server_handler.lock().unwrap().running {
@@ -124,7 +124,7 @@ pub fn proxy_client(
                                 .to_owned();
                         }
                         let status_res =
-                            packets::clientbound::status::StatusResponse::set_json(json);
+                            packets::clientbound::status::StatusResponse::set_json(Box::new(json));
                         status_res.send_packet(&mut client_stream);
                         if mc_server_handler.lock().unwrap().running {
                             let mut client_packet = Packet::parse(&mut client_stream).unwrap();
@@ -287,10 +287,11 @@ fn server_proxy_thread(
                             let mut a =
                                 packets::clientbound::status::StatusResponse::parse(server_packet)
                                     .unwrap();
-                            if let Some(mut json) = a.get_json().clone() {
-                                json.description
-                                    .text
+                            if let Some(mut json) = a.get_json() {
+                                let mut motd = json
+                                    .get_description()
                                     .push_str("\n    §dRusty proxy <3 version§r");
+
                                 a = packets::clientbound::status::StatusResponse::set_json(json);
                             } else {
                                 println!("Server STATUS: {}", a.get_string());

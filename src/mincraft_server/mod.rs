@@ -75,7 +75,7 @@ impl MinecraftServerHandler {
                 let status_response =
                     packets::clientbound::status::StatusResponse::parse(return_packet).unwrap();
                 match status_response.get_json() {
-                    Some(x) => Some(x.players.online != 0),
+                    Some(x) => Some(x.get_players_online() != 0),
                     None => {
                         println!("PROXY: query: Erroroooooor quering the amount of players...");
                         Some(true)
