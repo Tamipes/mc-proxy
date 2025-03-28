@@ -61,18 +61,18 @@ impl MinecraftServerHandler {
             //TODO: fixx this ok part
             Ok(mut stream_server) => {
                 let handshake = packets::serverbound::handshake::Handshake::create(
-                    VarInt::from(746),
+                    VarInt::from(746)?,
                     VarString::from(self.addr.clone()),
                     UShort::from(1234),
-                    VarInt::from(1),
-                );
-                handshake.send_packet(&mut stream_server);
-                let status_rq = packets::Packet::from_bytes(0, Vec::new());
-                status_rq.send_packet(&mut stream_server);
+                    VarInt::from(1)?,
+                )?;
+                handshake.send_packet(&mut stream_server).ok()?;
+                let status_rq = packets::Packet::from_bytes(0, Vec::new())?;
+                status_rq.send_packet(&mut stream_server).ok()?;
                 let return_packet = packets::Packet::parse(&mut stream_server)?;
                 let status_response =
                     packets::clientbound::status::StatusResponse::parse(return_packet).unwrap();
-                Some(status_response.get_json().players.online != 0)
+                Some(status_response.get_json()?.players.online != 0)
             }
             Err(_) => None,
         }

@@ -64,12 +64,12 @@ impl StatusResponse {
     pub fn get_string(&self) -> String {
         self.json.get_value()
     }
-    pub fn get_json(&self) -> StatusJson {
-        serde_json::from_str(&self.json.get_value()).unwrap()
+    pub fn get_json(&self) -> Option<StatusJson> {
+        serde_json::from_str(&self.json.get_value()).ok()
     }
-    pub fn set_json(json: StatusJson) -> StatusResponse {
-        let vec = VarString::from(serde_json::to_string(&json).unwrap()).move_data();
-        StatusResponse::parse(Packet::from_bytes(0, vec)).unwrap()
+    pub fn set_json(json: StatusJson) -> Option<StatusResponse> {
+        let vec = VarString::from(serde_json::to_string(&json).ok()?).move_data()?;
+        StatusResponse::parse(Packet::from_bytes(0, vec)?)
     }
     pub fn get_all(&self) -> Vec<u8> {
         self.all.clone()
@@ -77,8 +77,9 @@ impl StatusResponse {
 }
 
 impl SendPacket for StatusResponse {
-    fn send_packet(&self, stream: &mut std::net::TcpStream) {
-        stream.write_all(&self.all).unwrap();
-        stream.flush().unwrap();
+    fn send_packet(&self, stream: &mut std::net::TcpStream) -> std::io::Result<()> {
+        stream.write_all(&self.all)?;
+        stream.flush()?;
+        Ok(())
     }
 }

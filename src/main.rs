@@ -124,7 +124,7 @@ pub fn proxy_client(
                                 .to_owned();
                         }
                         let status_res =
-                            packets::clientbound::status::StatusResponse::set_json(json);
+                            packets::clientbound::status::StatusResponse::set_json(json).unwrap();
                         status_res.send_packet(&mut client_stream);
                         if mc_server_handler.lock().unwrap().running {
                             let mut client_packet = Packet::parse(&mut client_stream).unwrap();
@@ -152,11 +152,13 @@ pub fn proxy_client(
                         if mc_server_handler.lock().unwrap().running {
                             disc_pack = packets::clientbound::login::Disconnect::set_reason(
                                 "Starting...§d<3§r".to_owned(),
-                            );
+                            )
+                            .unwrap();
                         } else {
                             disc_pack = packets::clientbound::login::Disconnect::set_reason(
                                 "Okayyy_starting_it_now...§d<3§r".to_owned(),
-                            );
+                            )
+                            .unwrap();
                         }
                         disc_pack.send_packet(&mut client_stream);
 
@@ -316,11 +318,12 @@ fn server_proxy_thread(
                             let a =
                                 packets::clientbound::status::StatusResponse::parse(server_packet)
                                     .unwrap();
-                            let mut json = a.get_json().clone();
+                            let mut json = a.get_json().unwrap().clone();
                             json.description
                                 .text
                                 .push_str("\n    §dRusty proxy <3 version§r");
-                            let a = packets::clientbound::status::StatusResponse::set_json(json);
+                            let a = packets::clientbound::status::StatusResponse::set_json(json)
+                                .unwrap();
                             a.send_packet(&mut client_stream);
                             println!(
                                 "Server STATUS: {:#x} Status Response\t{}",

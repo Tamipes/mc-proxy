@@ -23,9 +23,9 @@ impl Disconnect {
     pub fn get_string(&self) -> String {
         self.reason.get_value()
     }
-    pub fn set_reason(reason: String) -> Disconnect {
-        let vec = VarString::from(reason).move_data();
-        Disconnect::parse(Packet::from_bytes(0, vec)).unwrap()
+    pub fn set_reason(reason: String) -> Option<Disconnect> {
+        let vec = VarString::from(reason).move_data()?;
+        Disconnect::parse(Packet::from_bytes(0, vec)?)
     }
     pub fn get_all(&self) -> Vec<u8> {
         self.all.clone()
@@ -33,8 +33,9 @@ impl Disconnect {
 }
 
 impl SendPacket for Disconnect {
-    fn send_packet(&self, stream: &mut std::net::TcpStream) {
-        stream.write_all(&self.all).unwrap();
-        stream.flush().unwrap();
+    fn send_packet(&self, stream: &mut std::net::TcpStream) -> std::io::Result<()> {
+        stream.write_all(&self.all)?;
+        stream.flush()?;
+        Ok(())
     }
 }

@@ -14,8 +14,9 @@ impl StatusRequest {
 }
 
 impl SendPacket for StatusRequest {
-    fn send_packet(&self, stream: &mut std::net::TcpStream) {
-        stream.write_all(&self.all).unwrap();
-        stream.flush().unwrap();
+    fn send_packet(&self, stream: &mut std::net::TcpStream) -> std::io::Result<()> {
+        stream.write_all(&self.all)?;
+        stream.flush()?;
+        Ok(())
     }
 }

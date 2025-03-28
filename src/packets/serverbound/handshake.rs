@@ -43,27 +43,28 @@ impl Handshake {
         server_address: VarString,
         server_port: UShort,
         next_state: VarInt,
-    ) -> Handshake {
-        let mut vec = VarInt::from(0).get_data();
+    ) -> Option<Handshake> {
+        let mut vec = VarInt::from(0)?.get_data();
         vec.append(&mut protocol_version.get_data());
-        vec.append(&mut server_address.get_data());
+        vec.append(&mut server_address.get_data()?);
         vec.append(&mut server_port.get_data());
         vec.append(&mut next_state.get_data());
-        let mut all = VarInt::from(vec.len() as i32).get_data();
+        let mut all = VarInt::from(vec.len() as i32)?.get_data();
         all.append(&mut vec);
-        Handshake {
+        Some(Handshake {
             protocol_version,
             server_address,
             server_port,
             next_state,
             all,
-        }
+        })
     }
 }
 
 impl SendPacket for Handshake {
-    fn send_packet(&self, stream: &mut std::net::TcpStream) {
-        stream.write_all(&self.all).unwrap();
-        stream.flush().unwrap();
+    fn send_packet(&self, stream: &mut std::net::TcpStream) -> std::io::Result<()> {
+        stream.write_all(&self.all)?;
+        stream.flush()?;
+        Ok(())
     }
 }

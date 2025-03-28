@@ -1,6 +1,6 @@
 use crate::{types::*, ProtocolState};
 use std::{
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::TcpStream,
 };
 pub mod clientbound;
@@ -14,42 +14,43 @@ pub struct Packet {
     pub all: Vec<u8>,
 }
 pub trait SendPacket {
-    fn send_packet(&self, stream: &mut TcpStream);
+    fn send_packet(&self, stream: &mut TcpStream) -> io::Result<()>;
 }
 
 impl SendPacket for Packet {
-    fn send_packet(&self, stream: &mut TcpStream) {
-        stream.write_all(&self.all).unwrap();
+    fn send_packet(&self, stream: &mut TcpStream) -> io::Result<()> {
+        stream.write_all(&self.all)?;
+        Ok(())
     }
 }
 
 impl Packet {
-    pub fn from_bytes(id: i32, data: Vec<u8>) -> Packet {
-        let id = VarInt::from(id);
-        let length = VarInt::from((data.len() + id.get_data().len()) as i32);
+    pub fn from_bytes(id: i32, data: Vec<u8>) -> Option<Packet> {
+        let id = VarInt::from(id)?;
+        let length = VarInt::from((data.len() + id.get_data().len()) as i32)?;
         let mut all = length.get_data();
         all.append(&mut id.get_data());
         all.append(&mut data.clone());
-        Packet {
+        Some(Packet {
             id,
             length,
             data,
             all,
-        }
+        })
     }
-    pub fn new(id: i32, data: Vec<u8>) -> Packet {
-        let mut vec = VarInt::from(id).get_data();
+    pub fn new(id: i32, data: Vec<u8>) -> Option<Packet> {
+        let mut vec = VarInt::from(id)?.get_data();
         vec.append(&mut data.clone());
 
-        let mut all = VarInt::from(vec.len() as i32).get_data();
+        let mut all = VarInt::from(vec.len() as i32)?.get_data();
         all.append(&mut vec.clone());
         all.append(&mut data.clone());
-        Packet {
-            id: VarInt::from(id),
-            length: VarInt::from(vec.len() as i32),
+        Some(Packet {
+            id: VarInt::from(id)?,
+            length: VarInt::from(vec.len() as i32)?,
             data,
             all,
-        }
+        })
     }
     pub fn parse(buf: &mut TcpStream) -> Option<Packet> {
         let bytes_iter = &mut buf.bytes().into_iter().map(|x| x.unwrap());
@@ -95,12 +96,12 @@ impl Packet {
             }
         }
     }
-    pub fn all(&self) -> Vec<u8> {
+    pub fn all(&self) -> Option<Vec<u8>> {
         let mut vec = self.id.get_data();
         vec.append(&mut self.data.clone());
-        let mut all = VarInt::from(vec.len() as i32).get_data();
+        let mut all = VarInt::from(vec.len() as i32)?.get_data();
         all.append(&mut vec);
-        return all;
+        return Some(all);
     }
     pub fn proto_name(&self, state: &ProtocolState) -> String {
         match state {

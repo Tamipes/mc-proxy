@@ -73,13 +73,13 @@ impl VarInt {
         }
         Some(VarInt { value, data: vec })
     }
-    pub fn from(num: i32) -> VarInt {
-        VarInt {
+    pub fn from(num: i32) -> Option<VarInt> {
+        Some(VarInt {
             value: num,
-            data: VarInt::write_varint(num),
-        }
+            data: VarInt::write_varint(num)?,
+        })
     }
-    fn write_varint(num: i32) -> Vec<u8> {
+    fn write_varint(num: i32) -> Option<Vec<u8>> {
         let mut num = num;
         let mut vec = Vec::new();
         if num == 0 {
@@ -89,11 +89,11 @@ impl VarInt {
             vec.push(num as u8 & SEGMENT_BITS);
             num = num >> 7;
             if num != 0 {
-                let a = vec.pop().unwrap();
+                let a = vec.pop()?;
                 vec.push(a | CONTINUE_BIT);
             }
         }
-        vec
+        Some(vec)
     }
 }
 
@@ -106,16 +106,16 @@ impl VarString {
     pub fn get_value(&self) -> String {
         self.value.clone()
     }
-    pub fn move_data(self) -> Vec<u8> {
-        let mut vec = VarInt::from(self.value.len() as i32).move_data();
+    pub fn move_data(self) -> Option<Vec<u8>> {
+        let mut vec = VarInt::from(self.value.len() as i32)?.move_data();
         vec.append(&mut (Vec::from(self.value.as_bytes())));
-        vec
+        Some(vec)
     }
 
-    pub fn get_data(&self) -> Vec<u8> {
-        let mut vec = VarInt::from(self.value.len() as i32).move_data();
+    pub fn get_data(&self) -> Option<Vec<u8>> {
+        let mut vec = VarInt::from(self.value.len() as i32)?.move_data();
         vec.append(&mut (Vec::from(self.value.as_bytes())));
-        vec
+        Some(vec)
     }
 
     pub fn from(string: String) -> VarString {
@@ -125,13 +125,13 @@ impl VarString {
     where
         I: Iterator<Item = u8>,
     {
-        let length = VarInt::read(data).unwrap();
+        let length = VarInt::read(data)?;
         let mut vec = Vec::new();
         for _ in 0..length {
-            vec.push(data.next().unwrap());
+            vec.push(data.next()?);
         }
         Some(VarString {
-            value: String::from_utf8(vec).unwrap(),
+            value: String::from_utf8(vec).ok()?,
         })
     }
 }
@@ -151,10 +151,10 @@ impl UShort {
     where
         I: Iterator<Item = u8>,
     {
-        let mut vec = vec![data.next().unwrap()];
+        let mut vec = vec![data.next()?];
         let mut int: u16 = vec[0] as u16;
         int = int << 8;
-        vec.push(data.next().unwrap());
+        vec.push(data.next()?);
         int |= vec[1] as u16;
         Some(UShort {
             value: int,
