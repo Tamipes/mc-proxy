@@ -292,7 +292,7 @@ fn server_proxy_thread(
                             if let Some(mut json) = a.get_json() {
                                 let mut motd = json
                                     .get_description()
-                                    .push_str("\n    §dRusty proxy <3 version§r");
+                                    .push_str("\n    §6Rusty proxy§r §d<3§r version");
 
                                 a = packets::clientbound::status::StatusResponse::set_json(json);
                             } else {
