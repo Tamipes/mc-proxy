@@ -1,6 +1,6 @@
 [package]
-name = "quick-start"
-version = "0.1.0"
+name = "mc-proxy"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 

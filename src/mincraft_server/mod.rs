@@ -44,12 +44,14 @@ impl MinecraftServerHandler {
                     Some(x) => {
                         if !x {
                             server.stop_mc_server();
-                            println!("PROXY: Stopping minecraft server!");
+                            println!("PROXY: polling: server is empty; Shutting down");
                             return;
+                        } else {
+                            println!("PROXY: polling: server is up and running")
                         }
                     }
                     None => {
-                        println!("PROXY: server is not running? we should stop this");
+                        println!("PROXY: polling:  server is not running? we should stop this");
                         return;
                     }
                 };
@@ -72,7 +74,13 @@ impl MinecraftServerHandler {
                 let return_packet = packets::Packet::parse(&mut stream_server)?;
                 let status_response =
                     packets::clientbound::status::StatusResponse::parse(return_packet).unwrap();
-                Some(status_response.get_json()?.players.online != 0)
+                match status_response.get_json() {
+                    Some(x) => Some(x.get_players_online() != 0),
+                    None => {
+                        println!("PROXY: query: Erroroooooor quering the amount of players...");
+                        Some(true)
+                    }
+                }
             }
             Err(_) => None,
         }
@@ -82,14 +90,14 @@ impl MinecraftServerHandler {
             .as_mut()?
             .write_all("stop\n".to_owned().as_bytes())
             .unwrap();
-        self.running = false;
         Some(())
     }
 }
 
 pub fn start_minecraft(mc_server_handler: Arc<Mutex<MinecraftServerHandler>>) {
     let selfo = mc_server_handler.clone();
-    let mut cmd = Command::new(mc_server_handler.lock().unwrap().start_command.clone())
+    let mut cmd = Command::new("bash")
+        .arg(mc_server_handler.lock().unwrap().start_command.clone())
         // .arg("ssh://root@elaina.tami.moe")
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())

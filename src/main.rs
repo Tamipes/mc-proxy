@@ -19,7 +19,7 @@ use nix::{
     unistd::pipe,
 };
 use packets::{
-    clientbound::status::StatusJson, serverbound::handshake::Handshake, Packet, SendPacket,
+    clientbound::status::StatusStructNew, serverbound::handshake::Handshake, Packet, SendPacket,
 };
 
 #[derive(Parser, Debug)]
@@ -110,7 +110,7 @@ pub fn proxy_client(
                             }
                         };
 
-                        let mut json = StatusJson::create();
+                        let mut json = StatusStructNew::create();
                         json.version.protocol = server_state.lock().unwrap().protocol_version;
                         json.players.max = 1;
                         if mc_server_handler.lock().unwrap().running {
@@ -124,7 +124,7 @@ pub fn proxy_client(
                                 .to_owned();
                         }
                         let status_res =
-                            packets::clientbound::status::StatusResponse::set_json(json).unwrap();
+                            packets::clientbound::status::StatusResponse::set_json(Box::new(json));
                         status_res.send_packet(&mut client_stream);
                         if mc_server_handler.lock().unwrap().running {
                             let mut client_packet = Packet::parse(&mut client_stream).unwrap();
@@ -240,41 +240,12 @@ fn client_proxy_thread(
                     }
                 }
                 ProtocolState::Login => {
-                    let (rd, wr) = pipe().unwrap();
-                    loop {
-                        let res = splice(
-                            client_stream.as_fd(),
-                            None,
-                            wr.try_clone().unwrap(),
-                            None,
-                            BUF_SIZE,
-                            SpliceFFlags::empty(),
-                        )
-                        .unwrap();
-                        if res == 0 {
-                            server_state.lock().unwrap().state = ProtocolState::ShutDown;
-                            server_stream.shutdown(std::net::Shutdown::Both).ok();
-                            client_stream.shutdown(std::net::Shutdown::Both).ok();
-                            println!("Client PLAY: {:#x} -> Shutdown res == 0", -1);
-                            return;
-                        }
-                        let _res = splice(
-                            rd.try_clone().unwrap(),
-                            None,
-                            server_stream.as_fd(),
-                            None,
-                            BUF_SIZE,
-                            SpliceFFlags::empty(),
-                        )
-                        .unwrap();
-                        if _res == 0 {
-                            server_state.lock().unwrap().state = ProtocolState::ShutDown;
-                            server_stream.shutdown(std::net::Shutdown::Both).ok();
-                            client_stream.shutdown(std::net::Shutdown::Both).ok();
-                            println!("Client PLAY: {:#x} -> Shutdown res == 0", -1);
-                            return;
-                        }
-                    }
+                    spliice(
+                        client_stream.try_clone().unwrap(),
+                        server_state.clone(),
+                        server_stream.try_clone().unwrap(),
+                        "Server".to_owned(),
+                    );
                 }
                 ProtocolState::ShutDown => {
                     println!("Client SHUTDOWN: by protocol_state");
@@ -315,15 +286,19 @@ fn server_proxy_thread(
                                 );
                                 return;
                             }
-                            let a =
+                            let mut a =
                                 packets::clientbound::status::StatusResponse::parse(server_packet)
                                     .unwrap();
-                            let mut json = a.get_json().unwrap().clone();
-                            json.description
-                                .text
-                                .push_str("\n    §dRusty proxy <3 version§r");
-                            let a = packets::clientbound::status::StatusResponse::set_json(json)
-                                .unwrap();
+                            if let Some(mut json) = a.get_json() {
+                                let mut motd = json
+                                    .get_description()
+                                    .push_str("\n    §dRusty proxy <3 version§r");
+
+                                a = packets::clientbound::status::StatusResponse::set_json(json);
+                            } else {
+                                println!("Server STATUS: {}", a.get_string());
+                                println!("Server STATUS: Failed to parse status response json... continuing without parsing");
+                            }
                             a.send_packet(&mut client_stream);
                             println!(
                                 "Server STATUS: {:#x} Status Response\t{}",
@@ -347,41 +322,12 @@ fn server_proxy_thread(
                     }
                 }
                 ProtocolState::Login => {
-                    let (rd, wr) = pipe().unwrap();
-                    loop {
-                        let res = splice(
-                            server_stream.as_fd(),
-                            None,
-                            wr.try_clone().unwrap(),
-                            None,
-                            BUF_SIZE,
-                            SpliceFFlags::empty(),
-                        )
-                        .unwrap();
-                        if res == 0 {
-                            server_state.lock().unwrap().state = ProtocolState::ShutDown;
-                            server_stream.shutdown(std::net::Shutdown::Both).ok();
-                            client_stream.shutdown(std::net::Shutdown::Both).ok();
-                            println!("Server PLAY: {:#x} -> Shutdown res == 0", -1);
-                            return;
-                        }
-                        let _res = splice(
-                            rd.try_clone().unwrap(),
-                            None,
-                            client_stream.as_fd(),
-                            None,
-                            BUF_SIZE,
-                            SpliceFFlags::empty(),
-                        )
-                        .unwrap();
-                        if _res == 0 {
-                            server_state.lock().unwrap().state = ProtocolState::ShutDown;
-                            server_stream.shutdown(std::net::Shutdown::Both).ok();
-                            client_stream.shutdown(std::net::Shutdown::Both).ok();
-                            println!("Server PLAY: {:#x} -> Shutdown res == 0", -1);
-                            return;
-                        }
-                    }
+                    spliice(
+                        server_stream.try_clone().unwrap(),
+                        server_state.clone(),
+                        client_stream.try_clone().unwrap(),
+                        "Server".to_owned(),
+                    );
                 }
                 ProtocolState::ShutDown => {
                     println!("Server SHUTDOWN: by protocol_state");
@@ -447,4 +393,53 @@ pub enum HandshakingPackets {
 pub enum StatusPackets {
     StatusRequest,
     PingRequest,
+}
+
+fn spliice(
+    mut server_stream: TcpStream,
+    server_state: Arc<Mutex<ClientConnectionState>>,
+    mut client_stream: TcpStream,
+    client_server_string: String,
+) {
+    let (rd, wr) = pipe().unwrap();
+    loop {
+        let res = splice(
+            server_stream.as_fd(),
+            None,
+            wr.try_clone().unwrap(),
+            None,
+            BUF_SIZE,
+            SpliceFFlags::empty(),
+        )
+        .unwrap();
+        if res == 0 {
+            server_state.lock().unwrap().state = ProtocolState::ShutDown;
+            server_stream.shutdown(std::net::Shutdown::Both).ok();
+            client_stream.shutdown(std::net::Shutdown::Both).ok();
+            println!(
+                "{client_server_string} PLAY: {:#x} -> Shutdown res == 0",
+                -1
+            );
+            return;
+        }
+        let _res = splice(
+            rd.try_clone().unwrap(),
+            None,
+            client_stream.as_fd(),
+            None,
+            BUF_SIZE,
+            SpliceFFlags::empty(),
+        )
+        .unwrap();
+        if _res == 0 {
+            server_state.lock().unwrap().state = ProtocolState::ShutDown;
+            server_stream.shutdown(std::net::Shutdown::Both).ok();
+            client_stream.shutdown(std::net::Shutdown::Both).ok();
+            println!(
+                "{client_server_string} PLAY: {:#x} -> Shutdown res == 0",
+                -1
+            );
+            return;
+        }
+    }
 }
