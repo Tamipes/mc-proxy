@@ -45,16 +45,19 @@ impl MinecraftServerHandler {
                         if !x {
                             server.stop_mc_server();
                             println!("PROXY: polling: server is empty; Shutting down");
-                            break;
+                            return;
                         } else {
                             println!("PROXY: polling: server is up and running")
                         }
                     }
                     None => {
                         println!("PROXY: polling:  server is not running? we should stop this");
-                        break;
+                        return;
                     }
                 };
+            } else {
+                println!("PROXY: polling: server is offline; stopping polling");
+                return;
             }
         });
     }
