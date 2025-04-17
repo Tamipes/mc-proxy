@@ -13,7 +13,7 @@ mod packets;
 mod types;
 
 use clap::Parser;
-use mincraft_server::{start_minecraft, MinecraftServerHandler};
+use mincraft_server::MinecraftServerHandler;
 use nix::{
     fcntl::{splice, SpliceFFlags},
     unistd::pipe,
@@ -39,7 +39,6 @@ fn main() {
     let listener = TcpListener::bind(&args.bind_addr).expect("Can't bind to address");
     let mc_server_handler = Arc::new(Mutex::new(MinecraftServerHandler::create(
         args.start_command.clone(),
-        listener.try_clone().unwrap(),
         args.proxy_to.clone(),
     )));
 
@@ -48,7 +47,7 @@ fn main() {
         match listener.accept() {
             Ok((str, addr)) => {
                 println!("{addr} -- Connected");
-                proxy_client(mc_server_handler.clone(), str, addr);
+                proxy_client(&mc_server_handler, str, addr);
                 println!("{addr} -- Disconnected");
             }
             Err(err) => eprintln!("Error encountered while resolving listener connection: {err}"),
@@ -56,10 +55,11 @@ fn main() {
     }
 }
 pub fn proxy_client(
-    mc_server_handler: Arc<Mutex<MinecraftServerHandler>>,
+    mc_server_handler: &Arc<Mutex<MinecraftServerHandler>>,
     mut client_stream: TcpStream,
     client_addr: SocketAddr,
 ) {
+    let mut mc_server_handler = mc_server_handler.clone();
     thread::spawn(move || {
         let client_packet = match Packet::parse(&mut client_stream) {
             Some(x) => x,
@@ -88,8 +88,9 @@ pub fn proxy_client(
             println!("Client HANDSHAKE -> bad packet; Disconnecting...");
             return;
         }
-        let mc_addr = mc_server_handler.lock().unwrap().addr.clone();
-        let mut server_stream = match TcpStream::connect(mc_addr) {
+        let mut server_stream = match TcpStream::connect(
+            mc_server_handler.lock().unwrap().addr.clone(),
+        ) {
             Ok(x) => x,
             Err(_) => {
                 let state = server_state.lock().unwrap().state;
@@ -113,7 +114,7 @@ pub fn proxy_client(
                         let mut json = StatusStructNew::create();
                         json.version.protocol = server_state.lock().unwrap().protocol_version;
                         json.players.max = 1;
-                        if mc_server_handler.lock().unwrap().running {
+                        if mc_server_handler.lock().unwrap().running() {
                             json.description.text =
                                 "§a Server is starting...§r please wait\n - §dTami§r with §d<3§r"
                                     .to_owned();
@@ -126,7 +127,7 @@ pub fn proxy_client(
                         let status_res =
                             packets::clientbound::status::StatusResponse::set_json(Box::new(json));
                         status_res.send_packet(&mut client_stream);
-                        if mc_server_handler.lock().unwrap().running {
+                        if mc_server_handler.lock().unwrap().running() {
                             let mut client_packet = Packet::parse(&mut client_stream).unwrap();
                             match client_packet.id.get_int() {
                                 1 => {
@@ -149,7 +150,7 @@ pub fn proxy_client(
                         let client_packet = Packet::parse(&mut client_stream).unwrap();
                         //TODO: The underscore bug https://minecraft.wiki/w/Java_Edition_protocol#Type:JSON_Text_Component
                         let disc_pack;
-                        if mc_server_handler.lock().unwrap().running {
+                        if mc_server_handler.lock().unwrap().running() {
                             disc_pack = packets::clientbound::login::Disconnect::set_reason(
                                 "Starting...§d<3§r".to_owned(),
                             )
@@ -162,7 +163,7 @@ pub fn proxy_client(
                         }
                         disc_pack.send_packet(&mut client_stream);
 
-                        start_minecraft(mc_server_handler.clone());
+                        mc_server_handler.lock().unwrap().start_minecraft_server();
                         println!("Server NOT WORKING ->  Disconnecting...");
                         return;
                     }
