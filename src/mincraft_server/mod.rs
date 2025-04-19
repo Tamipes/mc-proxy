@@ -12,12 +12,6 @@ use crate::{
     types::*,
 };
 
-#[derive(Clone)]
-pub struct MinecraftServerHandler {
-    start_command: String,
-    pub addr: String,
-    server: Option<Arc<Mutex<MinecraftServer>>>,
-}
 pub struct MinecraftServer {
     mc_server_stdin: ChildStdin,
     /// The amount of seconds since the server has no players online.
@@ -93,6 +87,11 @@ impl MinecraftServer {
     }
 }
 
+pub struct MinecraftServerHandler {
+    start_command: String,
+    pub addr: String,
+    server: Option<Arc<Mutex<MinecraftServer>>>,
+}
 impl MinecraftServerHandler {
     /// `addr` is the address the minecraft server is running on
     pub fn create(start_command: String, addr: String) -> MinecraftServerHandler {
