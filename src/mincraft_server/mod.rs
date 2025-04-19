@@ -85,6 +85,35 @@ impl MinecraftServer {
             .unwrap();
         Some(())
     }
+    fn shutdown_if_offline(&mut self, frequency: u64, timeout: u64) -> bool {
+        if self.running {
+            match self.query_server() {
+                Some(pl_online) => {
+                    if !pl_online {
+                        if self.shutdown_timer >= timeout {
+                            self.stop();
+                            println!("PROXY: polling: server is empty; Shutting down");
+                            self.shutdown_timer = 0;
+                            return true;
+                        } else {
+                            self.shutdown_timer += frequency;
+                            return false;
+                        }
+                    } else {
+                        self.shutdown_timer = 0;
+                        return false;
+                    }
+                }
+                None => {
+                    println!("PROXY: polling: server is not running? we should stop this");
+                    return false;
+                }
+            };
+        } else {
+            println!("PROXY: polling: server is offline; stopping polling");
+            return false;
+        }
+    }
 }
 
 pub struct MinecraftServerHandler {
@@ -114,37 +143,13 @@ impl MinecraftServerHandler {
             }
         };
         thread::Builder::new()
-            .name("Polling Thread".to_string())
+            .name("Server Polling Thread".to_string())
             .spawn(move || {
                 thread::sleep(time::Duration::from_secs(grace_period));
                 loop {
                     thread::sleep(time::Duration::from_secs(frequency));
                     let mut server = mc_server.lock().unwrap();
-                    if server.running {
-                        match server.query_server() {
-                            Some(pl_online) => {
-                                if !pl_online {
-                                    if server.shutdown_timer >= timeout {
-                                        server.stop();
-                                        println!("PROXY: polling: server is empty; Shutting down");
-                                        server.shutdown_timer = 0;
-                                        return;
-                                    } else {
-                                        server.shutdown_timer += frequency;
-                                    }
-                                } else {
-                                    server.shutdown_timer = 0;
-                                }
-                            }
-                            None => {
-                                println!(
-                                    "PROXY: polling:  server is not running? we should stop this"
-                                );
-                                return;
-                            }
-                        };
-                    } else {
-                        println!("PROXY: polling: server is offline; stopping polling");
+                    if server.shutdown_if_offline(frequency, timeout) {
                         return;
                     }
                 }
