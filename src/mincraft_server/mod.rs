@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    packets::{self, SendPacket},
+    packets::{self, clientbound::status::StatusTrait, SendPacket},
     types::*,
 };
 
@@ -52,7 +52,7 @@ impl MinecraftServer {
             .unwrap();
         return Some(selfo);
     }
-    pub fn query_server(&self) -> Option<bool> {
+    pub fn query_server(&self) -> Option<Box<dyn StatusTrait>> {
         match TcpStream::connect(self.addr.clone()) {
             //TODO: fixx this ok part
             Ok(mut stream_server) => {
@@ -68,13 +68,8 @@ impl MinecraftServer {
                 let return_packet = packets::Packet::parse(&mut stream_server)?;
                 let status_response =
                     packets::clientbound::status::StatusResponse::parse(return_packet).unwrap();
-                match status_response.get_json() {
-                    Some(x) => Some(x.get_players_online() != 0),
-                    None => {
-                        println!("PROXY: query: Erroroooooor quering the amount of players...");
-                        Some(true)
-                    }
-                }
+
+                return status_response.get_json();
             }
             Err(_) => None,
         }
@@ -89,7 +84,7 @@ impl MinecraftServer {
         if self.running {
             match self.query_server() {
                 Some(pl_online) => {
-                    if !pl_online {
+                    if pl_online.get_players_online() != 0 {
                         if self.shutdown_timer >= timeout {
                             self.stop();
                             println!("PROXY: polling: server is empty; Shutting down");
