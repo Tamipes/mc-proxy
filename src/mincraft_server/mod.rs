@@ -16,6 +16,7 @@ pub struct MinecraftServer {
     mc_server_stdin: ChildStdin,
     /// The amount of seconds since the server has no players online.
     shutdown_timer: u64,
+    one_player_timer: u64,
     running: bool,
     addr: String,
 }
@@ -39,6 +40,7 @@ impl MinecraftServer {
             shutdown_timer: 0,
             running: true,
             addr,
+            one_player_timer: 0,
         }));
 
         // Register callback for when the server stops
@@ -112,6 +114,27 @@ impl MinecraftServer {
             return true;
         }
     }
+    fn kick_if_one_player(&mut self, frequency: u64, timeout: u64) -> Option<()> {
+        match self.query_server() {
+            Some(response) => {
+                if response.get_players_online() == 1 {
+                    if self.one_player_timer == 0 {
+                        self.send_command("say You are the only online player, and you'll be kicked in 30 seconds <3 (let's play together instead)".to_owned());
+                    }
+                    if timeout <= self.one_player_timer {
+                        println!("PROXY: Kicking solo player!");
+                        self.send_command("kick @a".to_owned());
+                    } else {
+                        self.one_player_timer += frequency;
+                    }
+                } else {
+                    self.one_player_timer = 0;
+                }
+                return Some(());
+            }
+            None => return None,
+        }
+    }
 }
 
 pub struct MinecraftServerHandler {
@@ -148,6 +171,7 @@ impl MinecraftServerHandler {
                 if server.shutdown_if_offline(frequency, timeout, grace_period) {
                     return;
                 }
+                server.kick_if_one_player(frequency, 30);
             })
             .unwrap();
         return Some(());
