@@ -47,19 +47,19 @@ fn main() {
         match listener.accept() {
             Ok((str, addr)) => {
                 println!("{addr} -- Connected");
-                proxy_client(mc_server_handler.clone(), str, addr);
+                handle_client_join(mc_server_handler.clone(), str, addr);
                 println!("{addr} -- Disconnected");
             }
             Err(err) => eprintln!("Error encountered while resolving listener connection: {err}"),
         }
     }
 }
-pub fn proxy_client(
+pub fn handle_client_join(
     mc_server_handler: Arc<Mutex<MinecraftServerHandler>>,
     mut client_stream: TcpStream,
     client_addr: SocketAddr,
 ) {
-    thread::Builder::new().name("proxy_client".to_string()).spawn(move || {
+    thread::Builder::new().name("Client Join Handle".to_string()).spawn(move || {
         let client_packet = match Packet::parse(&mut client_stream) {
             Some(x) => x,
             None => {
