@@ -46,9 +46,7 @@ fn main() {
     loop {
         match listener.accept() {
             Ok((str, addr)) => {
-                println!("{addr} -- Connected");
                 handle_client_join(mc_server_handler.clone(), str, addr);
-                println!("{addr} -- Disconnected");
             }
             Err(err) => eprintln!("Error encountered while resolving listener connection: {err}"),
         }
@@ -60,6 +58,7 @@ pub fn handle_client_join(
     client_addr: SocketAddr,
 ) {
     thread::Builder::new().name("Client Join Handle".to_string()).spawn(move || {
+        println!("{client_addr} -- Connected");
         let client_packet = match Packet::parse(&mut client_stream) {
             Some(x) => x,
             None => {
@@ -189,6 +188,7 @@ pub fn handle_client_join(
             Ok(_) => (),
             Err(_) => server_state.lock().unwrap().state = ProtocolState::ShutDown,
         };
+        println!("{client_addr} -- Disconnected");
     }).unwrap();
 }
 
