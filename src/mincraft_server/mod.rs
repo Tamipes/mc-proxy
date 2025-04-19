@@ -75,11 +75,14 @@ impl MinecraftServer {
         }
     }
     pub fn stop(&mut self) -> Option<()> {
-        self.mc_server_stdin
-            .write_all("stop\n".to_owned().as_bytes())
-            .unwrap();
+        self.send_command("stop".to_owned())
+    }
+    pub fn send_command(&mut self, mut command: String) -> Option<()> {
+        command.push_str("\n");
+        self.mc_server_stdin.write_all(command.as_bytes()).ok()?;
         Some(())
     }
+
     fn shutdown_if_offline(&mut self, frequency: u64, timeout: u64) -> bool {
         if self.running {
             match self.query_server() {
