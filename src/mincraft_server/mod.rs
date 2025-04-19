@@ -49,10 +49,13 @@ impl MinecraftServer {
 
         // Register callback for when the server stops
         let callback_clone = selfo.clone();
-        std::thread::spawn(move || {
-            cmd.wait().unwrap();
-            callback_clone.lock().unwrap().running = false;
-        });
+        std::thread::Builder::new()
+            .name("Minecraft server callback thread".to_string())
+            .spawn(move || {
+                cmd.wait().unwrap();
+                callback_clone.lock().unwrap().running = false;
+            })
+            .unwrap();
         return Some(selfo);
     }
     pub fn query_server(&self) -> Option<bool> {
@@ -111,38 +114,43 @@ impl MinecraftServerHandler {
                 return None;
             }
         };
-        thread::spawn(move || {
-            thread::sleep(time::Duration::from_secs(grace_period));
-            loop {
-                thread::sleep(time::Duration::from_secs(frequency));
-                let mut server = mc_server.lock().unwrap();
-                if server.running {
-                    match server.query_server() {
-                        Some(pl_online) => {
-                            if !pl_online {
-                                if server.shutdown_timer >= timeout {
-                                    server.stop();
-                                    println!("PROXY: polling: server is empty; Shutting down");
-                                    server.shutdown_timer = 0;
-                                    return;
+        thread::Builder::new()
+            .name("Polling Thread".to_string())
+            .spawn(move || {
+                thread::sleep(time::Duration::from_secs(grace_period));
+                loop {
+                    thread::sleep(time::Duration::from_secs(frequency));
+                    let mut server = mc_server.lock().unwrap();
+                    if server.running {
+                        match server.query_server() {
+                            Some(pl_online) => {
+                                if !pl_online {
+                                    if server.shutdown_timer >= timeout {
+                                        server.stop();
+                                        println!("PROXY: polling: server is empty; Shutting down");
+                                        server.shutdown_timer = 0;
+                                        return;
+                                    } else {
+                                        server.shutdown_timer += frequency;
+                                    }
                                 } else {
-                                    server.shutdown_timer += frequency;
+                                    server.shutdown_timer = 0;
                                 }
-                            } else {
-                                server.shutdown_timer = 0;
                             }
-                        }
-                        None => {
-                            println!("PROXY: polling:  server is not running? we should stop this");
-                            return;
-                        }
-                    };
-                } else {
-                    println!("PROXY: polling: server is offline; stopping polling");
-                    return;
+                            None => {
+                                println!(
+                                    "PROXY: polling:  server is not running? we should stop this"
+                                );
+                                return;
+                            }
+                        };
+                    } else {
+                        println!("PROXY: polling: server is offline; stopping polling");
+                        return;
+                    }
                 }
-            }
-        });
+            })
+            .unwrap();
         return Some(());
     }
     pub fn running(&self) -> bool {

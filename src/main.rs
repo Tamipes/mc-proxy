@@ -47,7 +47,7 @@ fn main() {
         match listener.accept() {
             Ok((str, addr)) => {
                 println!("{addr} -- Connected");
-                proxy_client(&mc_server_handler, str, addr);
+                proxy_client(mc_server_handler.clone(), str, addr);
                 println!("{addr} -- Disconnected");
             }
             Err(err) => eprintln!("Error encountered while resolving listener connection: {err}"),
@@ -55,12 +55,11 @@ fn main() {
     }
 }
 pub fn proxy_client(
-    mc_server_handler: &Arc<Mutex<MinecraftServerHandler>>,
+    mc_server_handler: Arc<Mutex<MinecraftServerHandler>>,
     mut client_stream: TcpStream,
     client_addr: SocketAddr,
 ) {
-    let mut mc_server_handler = mc_server_handler.clone();
-    thread::spawn(move || {
+    thread::Builder::new().name("proxy_client".to_string()).spawn(move || {
         let client_packet = match Packet::parse(&mut client_stream) {
             Some(x) => x,
             None => {
@@ -190,7 +189,7 @@ pub fn proxy_client(
             Ok(_) => (),
             Err(_) => server_state.lock().unwrap().state = ProtocolState::ShutDown,
         };
-    });
+    }).unwrap();
 }
 
 const BUF_SIZE: usize = 1024 * 512;
@@ -199,65 +198,69 @@ fn client_proxy_thread(
     mut server_stream: TcpStream,
     server_state: Arc<Mutex<ClientConnectionState>>,
 ) -> JoinHandle<()> {
-    thread::spawn(move || {
-        let mut status_req = false;
-        loop {
-            let state = server_state.lock().unwrap().state.clone();
-            match state {
-                ProtocolState::Handshaking => {}
-                ProtocolState::Status => {
-                    let client_packet = Packet::parse(&mut client_stream).unwrap();
-                    match client_packet.id.get_int() {
-                        0 => {
-                            if status_req {
-                                server_state.lock().unwrap().state = ProtocolState::ShutDown;
-                                println!(
-                                    "Client STATUS: {:#x} -> Shutdown; status_request spam",
-                                    0
-                                );
+    thread::Builder::new()
+        .name("Client Proxy thread".to_string())
+        .spawn(move || {
+            let mut status_req = false;
+            loop {
+                let state = server_state.lock().unwrap().state.clone();
+                match state {
+                    ProtocolState::Handshaking => {}
+                    ProtocolState::Status => {
+                        let client_packet = Packet::parse(&mut client_stream).unwrap();
+                        match client_packet.id.get_int() {
+                            0 => {
+                                if status_req {
+                                    server_state.lock().unwrap().state = ProtocolState::ShutDown;
+                                    println!(
+                                        "Client STATUS: {:#x} -> Shutdown; status_request spam",
+                                        0
+                                    );
+                                    return;
+                                }
+                                let a = packets::serverbound::status::StatusRequest::parse(
+                                    client_packet,
+                                )
+                                .expect("Couldn't parse statusrequest serverbound???");
+                                a.send_packet(&mut server_stream);
+                                println!("Client STATUS: {:#x} Status Request", 0);
+                                status_req = true;
+                            }
+                            1 => {
+                                println!("Client STATUS: {:#x} Ping Request (exit)", 1);
+                                server_stream.write_all(&client_packet.all).unwrap();
+                                server_stream.flush().unwrap();
                                 return;
                             }
-                            let a =
-                                packets::serverbound::status::StatusRequest::parse(client_packet)
-                                    .expect("Couldn't parse statusrequest serverbound???");
-                            a.send_packet(&mut server_stream);
-                            println!("Client STATUS: {:#x} Status Request", 0);
-                            status_req = true;
-                        }
-                        1 => {
-                            println!("Client STATUS: {:#x} Ping Request (exit)", 1);
-                            server_stream.write_all(&client_packet.all).unwrap();
-                            server_stream.flush().unwrap();
-                            return;
-                        }
-                        _ => {
-                            println!(
-                                "Client STATUS: {:#x} Unknown Id -> Shutdown",
-                                client_packet.id.get_int()
-                            );
-                            server_state.lock().unwrap().state = ProtocolState::ShutDown;
-                            return;
+                            _ => {
+                                println!(
+                                    "Client STATUS: {:#x} Unknown Id -> Shutdown",
+                                    client_packet.id.get_int()
+                                );
+                                server_state.lock().unwrap().state = ProtocolState::ShutDown;
+                                return;
+                            }
                         }
                     }
+                    ProtocolState::Login => {
+                        spliice(
+                            client_stream.try_clone().unwrap(),
+                            server_state.clone(),
+                            server_stream.try_clone().unwrap(),
+                            "Server".to_owned(),
+                        );
+                    }
+                    ProtocolState::ShutDown => {
+                        println!("Client SHUTDOWN: by protocol_state");
+                        return;
+                    }
+                    ProtocolState::Configuration => todo!(),
+                    ProtocolState::Play => todo!(),
+                    ProtocolState::Transfer => todo!(),
                 }
-                ProtocolState::Login => {
-                    spliice(
-                        client_stream.try_clone().unwrap(),
-                        server_state.clone(),
-                        server_stream.try_clone().unwrap(),
-                        "Server".to_owned(),
-                    );
-                }
-                ProtocolState::ShutDown => {
-                    println!("Client SHUTDOWN: by protocol_state");
-                    return;
-                }
-                ProtocolState::Configuration => todo!(),
-                ProtocolState::Play => todo!(),
-                ProtocolState::Transfer => todo!(),
             }
-        }
-    })
+        })
+        .unwrap()
 }
 
 fn server_proxy_thread(
@@ -265,7 +268,7 @@ fn server_proxy_thread(
     mut server_stream: TcpStream,
     server_state: Arc<Mutex<ClientConnectionState>>,
 ) -> JoinHandle<()> {
-    thread::spawn(move || {
+    thread::Builder::new().name("Server Proxy thread".to_string()).spawn(move || {
         let mut spam = false;
         loop {
             let state = server_state.lock().unwrap().state.clone();
@@ -339,7 +342,7 @@ fn server_proxy_thread(
                 ProtocolState::Transfer => todo!(),
             };
         }
-    })
+    }).unwrap()
 }
 struct ClientConnectionState {
     state: ProtocolState,
