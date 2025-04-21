@@ -109,7 +109,7 @@ impl MinecraftServer {
             };
         } else {
             println!("PROXY: polling: server is offline; stopping polling");
-            return false;
+            return true;
         }
     }
 }
