@@ -86,9 +86,8 @@ pub fn handle_client_join(
             println!("Client HANDSHAKE -> bad packet; Disconnecting...");
             return;
         }
-        let mut server_stream = match TcpStream::connect(
-            mc_server_handler.lock().unwrap().addr.clone(),
-        ) {
+        let mc_addr = mc_server_handler.lock().unwrap().addr.clone();
+        let mut server_stream = match TcpStream::connect(mc_addr) {
             Ok(x) => x,
             Err(_) => {
                 let state = server_state.lock().unwrap().state;
