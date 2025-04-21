@@ -83,12 +83,12 @@ impl MinecraftServer {
         Some(())
     }
 
-    fn shutdown_if_offline(&mut self, frequency: u64, timeout: u64) -> bool {
+    fn shutdown_if_offline(&mut self, frequency: u64, timeout: u64, grace_period: u64) -> bool {
         if self.running {
             match self.query_server() {
                 Some(pl_online) => {
                     if pl_online.get_players_online() != 0 {
-                        if self.shutdown_timer >= timeout {
+                        if self.shutdown_timer >= (timeout + grace_period) {
                             self.stop();
                             println!("PROXY: polling: server is empty; Shutting down");
                             self.shutdown_timer = 0;
@@ -98,7 +98,7 @@ impl MinecraftServer {
                             return false;
                         }
                     } else {
-                        self.shutdown_timer = 0;
+                        self.shutdown_timer = grace_period;
                         return false;
                     }
                 }
@@ -142,14 +142,11 @@ impl MinecraftServerHandler {
         };
         thread::Builder::new()
             .name("Server Polling Thread".to_string())
-            .spawn(move || {
-                thread::sleep(time::Duration::from_secs(grace_period));
-                loop {
-                    thread::sleep(time::Duration::from_secs(frequency));
-                    let mut server = mc_server.lock().unwrap();
-                    if server.shutdown_if_offline(frequency, timeout) {
-                        return;
-                    }
+            .spawn(move || loop {
+                thread::sleep(time::Duration::from_secs(frequency));
+                let mut server = mc_server.lock().unwrap();
+                if server.shutdown_if_offline(frequency, timeout, grace_period) {
+                    return;
                 }
             })
             .unwrap();
