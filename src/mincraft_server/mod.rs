@@ -87,7 +87,7 @@ impl MinecraftServer {
         if self.running {
             match self.query_server() {
                 Some(pl_online) => {
-                    if pl_online.get_players_online() != 0 {
+                    if pl_online.get_players_online() == 0 {
                         if self.shutdown_timer >= (timeout + grace_period) {
                             self.stop();
                             println!("PROXY: polling: server is empty; Shutting down");
@@ -103,7 +103,7 @@ impl MinecraftServer {
                     }
                 }
                 None => {
-                    println!("PROXY: polling: server is not running? we should stop this");
+                    println!("PROXY: polling: unable to connect to server. Maybe it starting?");
                     return false;
                 }
             };
