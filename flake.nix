@@ -44,6 +44,10 @@
 
           # Additional environment variables can be set directly
           # MY_CUSTOM_VAR = "some value";
+          COMMIT_HASH = builtins.substring 0 7 (
+            if self ? rev then self.rev else "nixDirt"
+          );
+
         };
 
         craneLibLLvmTools = craneLib.overrideToolchain

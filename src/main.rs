@@ -111,15 +111,17 @@ pub fn handle_client_join(
                         let mut json = StatusStructNew::create();
                         json.version.protocol = server_state.lock().unwrap().protocol_version;
                         json.players.max = 1;
+                        let commit_hash: &'static str = env!(
+                            "COMMIT_HASH",
+                            "No COMMIT_HASH env var during build, but build.rs should always set it?"
+                        );
                         if mc_server_handler.lock().unwrap().running() {
                             json.description.text =
-                                "§a Server is starting...§r please wait\n - §dTami§r with §d<3§r"
-                                    .to_owned();
+                                format!("§aServer is starting...§r please wait\n - §dTami§r with §d<3§r §8(rev: {commit_hash})§r");
                             json.players.online = 1;
                         } else {
                             json.description.text =
-                            "Server is currently §onot§r running. \n§aJoin to start it!§r - §dTami§r with §d<3§r"
-                                .to_owned();
+                                format!("Server is currently §onot§r running. \n§aJoin to start it!§r - §dTami§r with §d<3§r §8(rev: {commit_hash})§r");
                         }
                         let status_res =
                             packets::clientbound::status::StatusResponse::set_json(Box::new(json));
@@ -292,10 +294,14 @@ fn server_proxy_thread(
                             let mut a =
                                 packets::clientbound::status::StatusResponse::parse(server_packet)
                                     .unwrap();
+                            let commit_hash: &'static str = env!(
+                                "COMMIT_HASH",
+                                "No COMMIT_HASH env var during build, but build.rs should always set it?"
+                            );
                             if let Some(mut json) = a.get_json() {
                                 let mut motd = json
                                     .get_description()
-                                    .push_str("\n    §6Rusty proxy§r §d<3§r version");
+                                    .push_str(&format!("\n    §6Rusty proxy§r §d<3§r version §8(rev: {commit_hash})"));
 
                                 a = packets::clientbound::status::StatusResponse::set_json(json);
                             } else {
