@@ -41,8 +41,12 @@ fn main() {
         args.start_command.clone(),
         args.proxy_to.clone(),
     )));
+    let commit_hash: &'static str = env!(
+        "COMMIT_HASH",
+        "No COMMIT_HASH env var during build, but build.rs should always set it?"
+    );
 
-    println!("Listening for connections!");
+    println!("Listening for connections!(rev: {commit_hash})");
     loop {
         match listener.accept() {
             Ok((str, addr)) => {
